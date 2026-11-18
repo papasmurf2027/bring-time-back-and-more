@@ -388,7 +388,13 @@ async function score(s){const r=await j('/api/scorecard/'+encodeURIComponent(s))
 async function follow(){const r=await j('/api/follow',{buyer:document.getElementById('fBuyer').value,seller:document.getElementById('fSeller').value});document.getElementById('followMsg').textContent=r.message||r.error;}
 async function makeDrop(){const r=await j('/api/drops',{seller:document.getElementById('dSeller').value,title:document.getElementById('dTitle').value});alert(r.ok?'Free Drop started — one entry per person, seller covers shipping':'Error');load();}
 async function makeShow(){const r=await j('/api/shows',{seller:document.getElementById('cSeller').value,title:document.getElementById('cTitle').value,startsAt:new Date(document.getElementById('cWhen').value).toISOString()});alert(r.ok?'Show scheduled':'Error');load();}
-async function joinWaitlist(){const r=await j('/api/waitlist',{name:document.getElementById('wName').value,email:document.getElementById('wEmail').value,founding:document.getElementById('wFound').checked});document.getElementById('waitMsg').textContent=r.ok?'You are on the waitlist!':r.error;}
+async function joinWaitlist(){const r=await j('/api/waitlist',{name:document.getElementById('wName').value,email:document.getElementById('wEmail').value,founding:document.getElementById('wFound').checked});
+  // The server tries to email a welcome note right away (Resend, if a key is set).
+  // 'sent' = check your email; 'manual'/'failed' = you're on the list, launch email still covers you.
+  if(!r.ok){document.getElementById('waitMsg').textContent=r.error;return;}
+  if(r.alreadyJoined){document.getElementById('waitMsg').textContent="You're already on the list — we'll email you when it goes live.";return;}
+  document.getElementById('waitMsg').textContent=r.welcomeEmail==='sent'?"You're on the list! Check your email for a welcome note — we'll email you when it goes live.":"You're on the list! We'll email you when it goes live.";
+}
 async function claimFounding(){const r=await j('/api/founding/claim',{seller:document.getElementById('wName').value||'Seller'});document.getElementById('waitMsg').textContent=r.ok?`Founding spot claimed! ${r.taken}/10 taken`:'Error: '+r.error;load();}
 async function loadDash(){const d=await j('/api/dashboard');document.getElementById('dash').innerHTML=`<p>Total fees earned: $${d.totalFeesEarned}</p><p>Tax set aside (${d.taxPercent}%): $${d.taxSetAside}</p><p>Available to use / owner draw: $${d.availableToUse}</p><p>Unpaid wins: ${d.unpaidWins.length} • Refunds pending: ${d.refundsPending.length} • Escrow held: ${d.escrowHeld.length}</p>`;loadLiveNotice();loadSoldQRs();}
 async function loadSoldQRs(){
@@ -404,6 +410,14 @@ function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt
 async function loadLiveNotice(){
   const d=await j('/api/waitlist/live-notice'); const el=document.getElementById('liveNotice'); if(!el)return;
   let h=`<p><b>${d.count} people</b> on the waitlist.</p>`;
+  // Welcome emails: who got one when they joined, and who is still waiting.
+  if(d.count){
+    const ws=(d.welcomeSent||0), wp=(d.welcomePending||0), wf=(d.welcomeFailed||0);
+    h+=`<p class="small">Welcome emails: <b>${ws} sent</b>${wp?` • <b>${wp} still to send</b>`:''}${wf?` • <b>${wf} failed to send</b>`:''}.</p>`;
+    if(wp&&d.welcomePendingEmails)h+=`<p class="small">Still to welcome: ${d.welcomePendingEmails.map(x=>escHtml((x.name?x.name+' — ':'')+x.email)).join('; ')}</p>`;
+    if(wf&&d.welcomeFailedEmails)h+=`<p class="small">Welcome failed for: ${d.welcomeFailedEmails.map(x=>escHtml((x.name?x.name+' — ':'')+x.email)).join('; ')}</p>`;
+    if(wp&&!d.resendConfigured)h+=`<p class="small">No Resend key set yet, so welcome emails can't send automatically — set RESEND_API_KEY in Railway and new joiners will get one right away. The launch email still covers everyone on the list.</p>`;
+  }
   if(d.sentAt)h+=`<p><span class="badge green">Sent ${escHtml(d.sentAt)} via ${escHtml(d.sentMode)} to ${d.sentCount} people.</span></p>`;
   else if(d.count)h+=`<p class="small">Not sent yet.</p>`;
   if(!d.resendConfigured)h+=`<p class="small">No automatic email key set — use copy / mailto below, or set RESEND_API_KEY in Railway to send automatically.</p>`;
