@@ -1,0 +1,1 @@
+{"dependencies":{"express":"^4.19.2","pg":"^8.12.0"},"description":"Bring Time Back and More — auction site for any item. Railway-ready rebuild.","engines":{"node":">=20"},"main":"server.js","name":"bring-time-back-and-more","scripts":{"dev":"node server.js","start":"node server.js"},"type":"commonjs","version":"1.0.0"}
