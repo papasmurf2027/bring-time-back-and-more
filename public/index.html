@@ -11,7 +11,7 @@
 <button class="btn ghost" onclick="show('dash')">Owner Dashboard</button>
 <div id="founding" class="small"></div></section>
 
-<section class="card"><h2>🔴 LIVE NOW</h2><p class="small">Sellers live now — join live in chat. Live means live in chat — no video yet. The camera picture streams on the seller's screen only, until a streaming service is connected at go-live.</p><div id="liveNow"></div></section>
+<section class="card"><h2>🔴 LIVE NOW</h2><p class="small">Sellers live now — watch their camera live, hear them talk, and type in chat what you want to see.</p><div id="liveNow"></div></section>
 
 <section class="card"><h2>Browse by Type</h2><div class="tiles" id="tiles"></div><div id="list" class="grid"></div></section>
 
@@ -40,7 +40,14 @@
 <button class="btn" onclick="joinWaitlist()">Join waitlist</button> <button class="btn ghost" onclick="claimFounding()">Claim a founding spot</button><p id="waitMsg"></p></section>
 
 <section class="card" id="dashSec" style="display:none"><h2>Owner Dashboard — Your money, tax put aside automatically</h2><div id="dash"></div>
-<label>Tax set-aside % <input id="taxPct" type="number" value="25"></label> <button class="btn" onclick="setTax()">Set tax %</button></section>
+<label>Tax set-aside % <input id="taxPct" type="number" value="25"></label> <button class="btn" onclick="setTax()">Set tax %</button>
+<h3>Tell the waitlist we're live</h3>
+<p class="small">Emails everyone on the waitlist (BCC, so nobody sees anyone else's email). It will not email the same list twice unless you tap "Send again". If no email key is set, nothing is sent automatically — copy the list or use the mailto link to send it from your own email instead.</p>
+<div id="liveNotice"></div>
+<button class="btn" onclick="sendLiveNotice(false)">Send we're live email</button>
+<button class="btn ghost" id="resendLiveBtn" style="display:none" onclick="if(confirm('Email the whole waitlist again?'))sendLiveNotice(true)">Send again</button>
+<button class="btn ghost" id="markSentBtn" style="display:none" onclick="markLiveSent()">I sent it from my own email — mark as sent</button>
+<p id="liveNoticeMsg"></p></section>
 
 <section class="card"><h2>Seven extras</h2><p class="small">Keep Track (follow a seller) • Free Drops (free giveaway) • My Top Limit (max bid) • Seller Scorecard • Coming Up (scheduled shows) • One Box Deal (combined shipping) • Label Pass (test label, no real carrier yet). Use the buttons on each item page / in the tools below.</p>
 <label>Follow a seller — your name <input id="fBuyer" placeholder="Your name"></label><label>Seller to follow <input id="fSeller" placeholder="Seller name"></label><button class="btn" onclick="follow()">Keep Track</button><p id="followMsg"></p>
