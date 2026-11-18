@@ -445,9 +445,11 @@ app.post('/api/listings/:id/ship', async (req, res) => {
 // ---------- Tiered seller payout timing (Kevin, 2026-11-18) ----------
 // A seller's tier is earned by CLEAN completed sales: a sale that completed,
 // was paid, delivered and had its escrow released, with no pending or approved
-// refund and no dispute flag on it. The 12-hour refund window for buyers is
-// unchanged and separate — a payout must never release before that window
-// closes, and is blocked while a refund is pending.
+// refund and no dispute flag on it. The refund window for buyers runs
+// until the seller's payout date for that sale (Kevin, 2026-11-18: the SAME
+// rule as the old 12-hour rule, applied to the longer hold) — a payout must
+// never release before that window closes, and is blocked while a refund is
+// pending. After the payout date, no refund.
 //   New seller:    0-2 clean sales.
 //   Trusted seller: 3-9 clean sales.
 //   Top seller:    10+ clean sales AND a good score (Seller Scorecard average
@@ -492,7 +494,9 @@ async function payoutFor(l) {
   const amount = saleAmount(l);
   const hours = payoutHoursFor(t.tier, amount);
   const payoutAt = l.delivered_at ? new Date(new Date(l.delivered_at).getTime() + hours * 3600 * 1000).toISOString() : null;
-  return { ...t, amount, payoutHours: hours, payoutLabel: payoutLabelFor(hours), payoutAt };
+  // Refund window closes at the payout date: same rule as the old 12-hour
+  // rule (legit reason + photo + video), applied to the longer hold.
+  return { ...t, amount, payoutHours: hours, payoutLabel: payoutLabelFor(hours), payoutAt, refundDeadline: payoutAt, refundLabel: payoutLabelFor(hours) };
 }
 app.post('/api/listings/:id/deliver', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
@@ -507,8 +511,7 @@ app.post('/api/listings/:id/release-escrow', async (req, res) => {
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
   const payout = await payoutFor(l);
-  if (Date.now() - new Date(l.delivered_at).getTime() < 12 * 3600 * 1000) return res.json({ ok: false, error: '12-hour refund window is still open', payout });
-  if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'payout is not due yet — ' + payout.tier + ' seller, ' + payout.payoutLabel + ' after delivery. Payout date: ' + payout.payoutAt, payout });
+  if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout });
   const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [l.id]);
   if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
   await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
@@ -677,7 +680,11 @@ app.post('/api/refunds', async (req, res) => {
   if (!b.videoName) return res.json({ ok: false, error: 'a video of the item is required' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [b.listingId]);
   if (!l || !l.delivered_at) return res.json({ ok: false, error: 'refunds open only after delivery' });
-  if (Date.now() - new Date(l.delivered_at).getTime() > 12 * 3600 * 1000) return res.json({ ok: false, error: 'the 12-hour refund window has closed' });
+  // Refund window runs until the seller's payout date for this sale — the
+  // same rule as the old 12-hour rule, applied to the longer hold. After the
+  // payout date (money released to the seller) there is no refund.
+  const payout = await payoutFor(l);
+  if (l.escrow_status === 'released' || (payout.payoutAt && new Date() >= new Date(payout.payoutAt))) return res.json({ ok: false, error: 'the refund window has closed — refunds close on the payout date (' + payout.payoutLabel + ' after delivery, ' + (payout.payoutAt || 'not set yet') + '), and no refund is possible after the seller is paid out', payout });
   if (!['not as described', 'damaged in transit', 'wrong item', 'defective', 'never arrived'].includes((b.reason || '').toLowerCase())) return res.json({ ok: false, error: 'a legit reason is required — "changed my mind" is not accepted' });
   await query('INSERT INTO refunds(id,listing_id,requester,reason,photo_name,video_name,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
     [uid(), b.listingId, b.requester || 'Buyer', b.reason, b.photoName, b.videoName, 'pending', nowISO()]);
@@ -820,7 +827,8 @@ app.get('/api/dashboard', async (req, res) => {
   // ---------- Safe to take out (owner draw) ----------
   // Only Kevin's FEES ever count here — seller escrow money is never his
   // money and is never counted. A fee is SAFE to draw only when its sale is
-  // past delivery + the 12-hour refund window, the seller has been paid, there
+  // past delivery + the refund window (which closes at the seller's payout
+  // date for that sale), the seller has been paid, there
   // is no refund or dispute on it, AND it is older than 30 days. 30 days is
   // the practical safe point used here — the full bank chargeback window is
   // 60-120 days, so a chargeback can still come in after 30 days, just far
@@ -856,11 +864,12 @@ app.get('/api/dashboard', async (req, res) => {
     monthlyFees: Math.round(last30Fees * 100) / 100,
     reserve,
     alert: safeAfterTax > 0 ? 'Safe to take out: $' + safeAfterTax.toFixed(2) + ' — leave $' + reserve.toFixed(2) + ' in the business to cover chargebacks.' : null,
-    note: 'Safe = fee from a sale delivered over 30 days ago, past the 12-hour refund window, seller paid, no refund or dispute. The full bank chargeback window is 60-120 days — 30 days is the practical safe point, not a guarantee. Only your fees count here, never seller escrow money.'
+    note: 'Safe = fee from a sale delivered over 30 days ago, past the refund window (which closes on the payout date for that sale), seller paid, no refund or dispute. The full bank chargeback window is 60-120 days — 30 days is the practical safe point, not a guarantee. Only your fees count here, never seller escrow money.'
   };
   const tax = fees * (settings.tax_percent / 100);
   const unpaid = await query("SELECT * FROM listings WHERE status='ended' AND payment_status IN ('awaiting_payment','declined')");
   const refunds = await query("SELECT * FROM refunds WHERE status='pending'");
+  for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; } }
   const escrowHeld = await query("SELECT * FROM listings WHERE escrow_status LIKE 'held%'");
   const held = [];
   for (const l of escrowHeld) { const payout = await payoutFor(l); held.push({ id: l.id, title: l.title, seller: l.seller, amount: l.escrow_amount, saleAmount: saleAmount(l), payout }); }
