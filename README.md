@@ -25,6 +25,7 @@ A fresh rebuild of Kevin's auction site, built from the settled spec — **not**
 - Seven features, own wording: Keep Track, Free Drops, My Top Limit, Seller Scorecard, Coming Up, One Box Deal (biggest shipping once + $2 per extra item), Label Pass (test only).
 - Owner dashboard: fees earned, tax set aside (default **25%**, changeable 20/25/30/custom), available to use / owner draw, kept separate from escrow.
 - Pre-launch/test banner + waitlist. Footer: "© 2026 Bring Time Back and More. All rights reserved." + no-copying note. **No "Whatnot" name anywhere, no "simpler than Whatnot".**
+- Owner dashboard: "Tell the waitlist we're live" — shows the waitlist count, the ready-to-send message, a copyable email list and a BCC mailto link. With `RESEND_API_KEY` set (free Resend account, https://resend.com — create an API key, add it as a Railway Variable; optional `FROM_EMAIL` / `OWNER_EMAIL`), it sends the email automatically via Resend (one call, everyone in BCC). Without a key nothing is sent automatically — Kevin sends it from his own email via the mailto link and taps "I sent it" to mark it sent. A `live_notice` row records a completed send, so the list is never emailed twice by accident (a second send needs the explicit "Send again" button). It does **not** flip `PRELAUNCH` off — that is still a separate decision.
 
 ## Run locally (no Postgres needed)
 

@@ -388,6 +388,60 @@ app.post('/api/waitlist', async (req, res) => {
     [uid(), req.body.name || '', req.body.email || '', req.body.role || 'buyer', req.body.founding ? 1 : 0, nowISO()]);
   res.json({ ok: true });
 });
+// ---------- "We're live" email to the waitlist (owner dashboard only) ----------
+// Automatic sending uses Resend (https://api.resend.com/emails) when RESEND_API_KEY
+// is set — no new npm dependency, plain fetch. From defaults to Resend's test sender
+// unless FROM_EMAIL is set. If no key is set, nothing is sent: the dashboard gets
+// the full ready-to-send message, a copyable email list and a BCC mailto link, so
+// Kevin can send it from his own email in one tap, then mark it sent.
+// A live_notice row (id=1) records a completed send, so the same list is never
+// emailed twice by accident — a second send needs an explicit force ("Send again").
+const LIVE_SITE = 'https://bringtimebackandmore.com';
+const LIVE_SUBJECT = 'Bring Time Back and More is LIVE now';
+function liveEmailBody() {
+  return 'Hi,\n\nBring Time Back and More is LIVE now at ' + LIVE_SITE + '\n\nWe\'re no longer in test mode — you can list, bid and buy now.\n\nFounding sellers: first 10 get 0% until live, then 5% forever. Everyone else pays 10%.\n\nList in 3 steps, bid in 1 tap.\n\nSee you there,\nBring Time Back and More';
+}
+function liveMailto(emails) {
+  return 'mailto:?bcc=' + encodeURIComponent(emails.join(',')) + '&subject=' + encodeURIComponent(LIVE_SUBJECT) + '&body=' + encodeURIComponent(liveEmailBody());
+}
+async function getLiveNoticePreview() {
+  const rows = await query('SELECT * FROM waitlist WHERE email IS NOT NULL AND email <> \'\' ORDER BY created_at ASC');
+  const seen = new Set(); const emails = [];
+  for (const r of rows) { const e = String(r.email).trim().toLowerCase(); if (e.includes('@') && !seen.has(e)) { seen.add(e); emails.push(e); } }
+  const sent = await queryOne('SELECT * FROM live_notice WHERE id=1');
+  return { count: emails.length, emails, subject: LIVE_SUBJECT, body: liveEmailBody(), mailto: emails.length ? liveMailto(emails) : '', resendConfigured: !!process.env.RESEND_API_KEY, sentAt: sent ? sent.sent_at : null, sentMode: sent ? sent.mode : null, sentCount: sent ? sent.recipient_count : null };
+}
+app.get('/api/waitlist/live-notice', async (req, res) => res.json({ ok: true, ...(await getLiveNoticePreview()) }));
+app.post('/api/waitlist/live-notice', async (req, res) => {
+  const b = req.body || {};
+  const preview = await getLiveNoticePreview();
+  const already = !!preview.sentAt;
+  // Owner sent it from his own email (copy / mailto mode) — record that, don't re-send.
+  if (b.markManualSent) {
+    if (already) return res.json({ ok: false, alreadySent: true, error: 'already sent on ' + preview.sentAt + ' (' + preview.sentMode + ') — use "Send again" to email everyone again', ...preview });
+    if (!preview.count) return res.json({ ok: false, error: 'no one on the waitlist yet', ...preview });
+    await query('INSERT INTO live_notice(id,sent_at,mode,recipient_count,subject) VALUES(1,$1,$2,$3,$4)', [nowISO(), 'manual', preview.count, LIVE_SUBJECT]);
+    return res.json({ ...(await getLiveNoticePreview()), ok: true, sent: true, mode: 'manual', sentCount: preview.count });
+  }
+  if (already && !b.force) return res.json({ ok: false, alreadySent: true, error: 'already sent on ' + preview.sentAt + ' (' + preview.sentMode + ') — use "Send again" to email everyone again', ...preview });
+  if (!preview.count) return res.json({ ok: false, error: 'no one on the waitlist yet', ...preview });
+  // No email key: do NOT claim anything was sent — return the ready-to-send pack.
+  if (!process.env.RESEND_API_KEY) {
+    return res.json({ ...preview, ok: true, sent: false, mode: 'manual', message: 'No email key set — nothing was sent. Copy the email list or use the mailto link to send it from your own email, then tap "I sent it from my own email" to mark it sent.' });
+  }
+  try {
+    const fromEmail = process.env.FROM_EMAIL || 'Bring Time Back and More <onboarding@resend.dev>';
+    const toAddr = process.env.OWNER_EMAIL || preview.emails[0];
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: fromEmail, to: [toAddr], bcc: preview.emails.filter(e => e !== toAddr), subject: LIVE_SUBJECT, text: preview.body }) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return res.json({ ...preview, ok: false, sent: false, mode: 'resend', error: 'Resend failed (' + r.status + '): ' + (data.message || JSON.stringify(data)) });
+    if (already) await query('UPDATE live_notice SET sent_at=$1, mode=$2, recipient_count=$3, subject=$4 WHERE id=1', [nowISO(), 'resend', preview.count, LIVE_SUBJECT]);
+    else await query('INSERT INTO live_notice(id,sent_at,mode,recipient_count,subject) VALUES(1,$1,$2,$3,$4)', [nowISO(), 'resend', preview.count, LIVE_SUBJECT]);
+    return res.json({ ...(await getLiveNoticePreview()), ok: true, sent: true, mode: 'resend', sentCount: preview.count, resendId: data.id || null });
+  } catch (e) {
+    return res.json({ ...preview, ok: false, sent: false, mode: 'resend', error: 'Resend request failed: ' + e.message });
+  }
+});
 app.get('/api/dashboard', async (req, res) => {
   const settings = await getSettings();
   const sold = await query("SELECT * FROM listings WHERE status='sold' AND escrow_status='released'");

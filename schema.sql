@@ -38,6 +38,12 @@ CREATE TABLE IF NOT EXISTS refunds (
 );
 CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, carrier TEXT NOT NULL, tracking TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, receipt_no TEXT NOT NULL, amount REAL NOT NULL, shipping REAL NOT NULL, total REAL NOT NULL, created_at TEXT NOT NULL);
+-- "We're live" notice to the waitlist: one row (id=1) records that it was sent,
+-- so the same list is never emailed twice by accident. mode is 'resend' or 'manual'.
+CREATE TABLE IF NOT EXISTS live_notice (
+  id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL, mode TEXT NOT NULL,
+  recipient_count INTEGER DEFAULT 0, subject TEXT DEFAULT ''
+);
 CREATE TABLE IF NOT EXISTS live_signals (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL, payload TEXT DEFAULT '', created_at TEXT NOT NULL
