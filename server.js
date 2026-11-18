@@ -28,6 +28,32 @@ async function query(text, params = []) {
 async function queryOne(text, params = []) { const rows = await query(text, params); return rows[0] || null; }
 const uid = () => crypto.randomUUID();
 const nowISO = () => new Date().toISOString();
+// Shipping by package size (Whatnot-style US rates, buyer pays). The seller picks
+// a size when listing; the buyer is charged that tier — no more guessing a $ amount.
+const SHIP_SIZES = {
+  small: { label: 'Small — under 4 oz', price: 4.47 },
+  medium: { label: 'Medium — 4–8 oz', price: 4.85 },
+  large: { label: 'Large — 8–12 oz', price: 5.25 },
+  xl: { label: 'XL — 12 oz–1 lb', price: 6.75 },
+  box: { label: 'Box — 1–5 lb', price: 7.75 },
+  bigbox: { label: 'Big box — over 5 lb', price: 9.69, note: '$9.69+ — varies by zone' },
+  flat: { label: 'Flat Rate box', price: 12.99 },
+  envelope: { label: 'Card envelope', price: 0.99 },
+};
+function shipPrice(size) { const s = SHIP_SIZES[size]; return s ? s.price : null; }
+function shipLabel(size) { const s = SHIP_SIZES[size]; return s ? s.label : ''; }
+// QR code text for a won/sold item: the exact sale, so scanning it opens that
+// sold item page (the app opens ?item= on load). Short param names keep the QR small.
+function qrTextFor(l, receiptNo, tracking) {
+  return 'https://bringtimebackandmore.com/?i=' + l.id + '&r=' + (receiptNo || '') + '&t=' + (tracking || '');
+}
+function makeTracking() { return 'BTB' + String(Math.floor(Math.random() * 900000000) + 100000000) + 'US'; }
+async function qrForListing(l) {
+  if (!l || l.status !== 'sold' || l.payment_status !== 'validated') return null;
+  const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
+  if (!receipt) return null;
+  return { qrText: qrTextFor(l, receipt.receipt_no, l.tracking || ''), receiptNo: receipt.receipt_no, tracking: l.tracking || '' };
+}
 const BANNED = ['stolen','counterfeit','fake id','illegal drugs','weapon','firearm','explosives','human trafficking','stolen goods'];
 const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Vehicles','Home','Fashion','Art','Sports','Toys','Other'];
 function bannedHit(s) { const t = (s || '').toLowerCase(); return BANNED.find(b => t.includes(b)); }
@@ -57,6 +83,8 @@ async function init() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   for (const st of schema.split(';')) { const t = st.trim(); if (t) { try { await query(t); } catch (e) { /* table may exist */ } } }
   try { await query('ALTER TABLE listings ADD COLUMN image_url TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN package_size TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN shipped_at TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // Auto-end timers + draw free drops, every second.
@@ -102,13 +130,26 @@ app.get('/api/listings/:id', async (req, res) => {
   const chats = await query('SELECT * FROM chats WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]);
   const reviews = await query('SELECT * FROM reviews WHERE listing_id=$1 ORDER BY created_at DESC', [l.id]);
   const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
-  res.json({ ...l, bids, chats, reviews, receipt });
+  const qr = await qrForListing(l);
+  res.json({ ...l, bids, chats, reviews, receipt, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, package_label: shipLabel(l.package_size) });
+});
+// QR code for one won/sold item (after payment validates). Not a real postage label.
+app.get('/api/listings/:id/qr', async (req, res) => {
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  const qr = await qrForListing(l);
+  if (!qr) return res.json({ ok: false, error: 'no QR code yet — the item has not been won and paid for' });
+  res.json({ ok: true, listingId: l.id, title: l.title, seller: l.seller, winner: l.winner, packageSize: l.package_size || '', packageLabel: shipLabel(l.package_size), shipping: l.shipping, tracking: qr.tracking, receiptNo: qr.receiptNo, qrText: qr.qrText, note: 'Shipment record / scan-to-identify code — not real USPS postage yet. Scan it to open this exact sale, then tap Mark as shipped.' });
 });
 app.post('/api/listings', async (req, res) => {
   const b = req.body || {};
   if (!b.seller || !b.title) return res.json({ ok: false, error: 'seller and title are required' });
   if (!b.agreement) return res.json({ ok: false, error: 'Seller Agreement must be accepted' });
-  if (b.shipping === undefined || b.shipping === null || b.shipping === '') return res.json({ ok: false, error: 'shipping cost is required — buyers pay shipping' });
+  // Shipping is set by package size; a plain $ amount is still accepted for
+  // backwards compatibility (older clients / API callers without a size).
+  const sizePrice = shipPrice(b.packageSize);
+  const shipAmt = sizePrice !== null ? sizePrice : Number(b.shipping);
+  if (!shipAmt && shipAmt !== 0) return res.json({ ok: false, error: 'pick a package size — buyers pay shipping by size' });
   if (!b.shippingInsured) return res.json({ ok: false, error: 'insured shipping is required' });
   const bad = bannedHit(b.title + ' ' + (b.description || ''));
   if (bad) return res.json({ ok: false, error: 'banned item: ' + bad });
@@ -122,9 +163,9 @@ app.post('/api/listings', async (req, res) => {
   const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
   const id = uid();
   const img = typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '';
-  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17)`,
-    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, Number(b.shipping), b.shippingInsured ? 1 : 0, b.carrier || '', auth, timer, b.mode || 'Regular', created.toISOString(), type === 'auction' ? ends.toISOString() : null, img]);
+  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url,package_size)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17,$18)`,
+    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, b.carrier || '', auth, timer, b.mode || 'Regular', created.toISOString(), type === 'auction' ? ends.toISOString() : null, img, sizePrice !== null ? b.packageSize : '']);
   res.json({ ok: true, id });
 });
 // ---------- Bidding ----------
@@ -167,8 +208,14 @@ async function completeSale(l, buyer, method, detail) {
   }
   const total = (l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0)) + (l.shipping || 0);
   const receiptNo = 'BTB-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000);
-  await query("UPDATE listings SET status='sold', winner=$1, payment_status='validated', payment_method=$2, payment_last4=$3, payment_reason='', escrow_status='held_waiting_shipment', escrow_amount=$4 WHERE id=$5",
-    [buyer, method, String(detail || '').replace(/\D/g, '').slice(-4) || '', total, l.id]);
+  // Every paid sale gets a tracking code right away, so its QR code (and Label Pass)
+  // identify that exact sale — the seller scans the QR to find this order, not another.
+  const tracking = l.tracking || makeTracking();
+  await query("UPDATE listings SET status='sold', winner=$1, payment_status='validated', payment_method=$2, payment_last4=$3, payment_reason='', escrow_status='held_waiting_shipment', escrow_amount=$4, tracking=$5 WHERE id=$6",
+    [buyer, method, String(detail || '').replace(/\D/g, '').slice(-4) || '', total, tracking, l.id]);
+  const exLabel = await queryOne('SELECT * FROM labels WHERE listing_id=$1', [l.id]);
+  if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+    [uid(), l.id, l.carrier || 'USPS', tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
   await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [uid(), l.id, receiptNo, l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0), l.shipping || 0, total, nowISO()]);
   return { ok: true, total, receiptNo };
@@ -203,14 +250,27 @@ app.post('/api/listings/:id/rerun', async (req, res) => {
   const created = new Date(); const ends = new Date(created.getTime() + (l.timer_seconds || 30) * 1000);
   await query('DELETE FROM bids WHERE listing_id=$1', [l.id]);
   await query(`UPDATE listings SET status='live', winner=NULL, payment_status='none', payment_reason='', escrow_status='not_started', escrow_amount=0,
-    current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
+    current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL, shipped_at=NULL WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
   res.json({ ok: true, endsAt: ends.toISOString() });
 });
 // ---------- Shipping / escrow release ----------
+// Mark as shipped: the seller scans the sale's QR code, lands on this exact
+// sold item, and taps this — no more boxing up the wrong order. Only the seller,
+// only after payment validated. Keeps the sale's tracking code if one is already set.
+app.post('/api/listings/:id/mark-shipped', async (req, res) => {
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can mark this shipped' });
+  if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until the item is sold and payment validates' });
+  if (l.shipped_at) return res.json({ ok: false, error: 'already marked as shipped' });
+  const tracking = l.tracking || makeTracking();
+  await query('UPDATE listings SET tracking=$1, shipped_at=$2, escrow_status=$3 WHERE id=$4', [tracking, nowISO(), 'held_waiting_delivery', l.id]);
+  res.json({ ok: true, tracking, shippedAt: nowISO() });
+});
 app.post('/api/listings/:id/ship', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until payment validates' });
-  await query('UPDATE listings SET tracking=$1, escrow_status=$2 WHERE id=$3', [req.body.tracking || '', 'held_waiting_delivery', l.id]);
+  await query('UPDATE listings SET tracking=$1, escrow_status=$2 WHERE id=$3', [req.body.tracking || l.tracking || '', 'held_waiting_delivery', l.id]);
   res.json({ ok: true });
 });
 app.post('/api/listings/:id/deliver', async (req, res) => {

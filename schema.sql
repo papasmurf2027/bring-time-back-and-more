@@ -14,7 +14,8 @@ CREATE TABLE IF NOT EXISTS listings (
   winner TEXT, payment_status TEXT DEFAULT 'none', payment_method TEXT, payment_last4 TEXT, payment_reason TEXT,
   escrow_status TEXT DEFAULT 'not_started', escrow_amount REAL DEFAULT 0,
   tracking TEXT, delivered INTEGER DEFAULT 0, delivered_at TEXT, seller_live INTEGER DEFAULT 0, seller_live_at TEXT,
-  buy_now_offer REAL, buy_now_offer_by TEXT, image_url TEXT DEFAULT ''
+  buy_now_offer REAL, buy_now_offer_by TEXT, image_url TEXT DEFAULT '',
+  package_size TEXT DEFAULT '', shipped_at TEXT
 );
 CREATE TABLE IF NOT EXISTS bids (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, bidder TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL
