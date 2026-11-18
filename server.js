@@ -67,7 +67,7 @@ async function qrForListing(l) {
   return { qrText: qrTextFor(l, receipt.receipt_no, l.tracking || '', carrier), receiptNo: receipt.receipt_no, tracking: l.tracking || '', carrier };
 }
 const BANNED = ['stolen','counterfeit','fake id','illegal drugs','weapon','firearm','explosives','human trafficking','stolen goods'];
-const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Vehicles','Home','Fashion','Art','Sports','Toys','Other'];
+const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Home','Fashion','Art','Sports','Toys','Other'];
 function bannedHit(s) { const t = (s || '').toLowerCase(); return BANNED.find(b => t.includes(b)); }
 function feePercent(seller, founding) { return founding ? 5 : 10; } // founding forever rate 5%, normal 10%
 
