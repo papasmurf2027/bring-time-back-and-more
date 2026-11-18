@@ -42,17 +42,29 @@ const SHIP_SIZES = {
 };
 function shipPrice(size) { const s = SHIP_SIZES[size]; return s ? s.price : null; }
 function shipLabel(size) { const s = SHIP_SIZES[size]; return s ? s.label : ''; }
+// Shipping carrier rule (Kevin, 2026-11-18): ALL shipments go USPS, EXCEPT
+// Big box over 5 lb, which goes UPS. No FedEx. The carrier is automatic from
+// package size — the seller never picks it, and the QR code must match it.
+function carrierFor(size) { return size === 'bigbox' ? 'UPS' : 'USPS'; }
+// Tracking formats (test records, not real carrier postage):
+//   USPS: BTB + 9 digits + US   (e.g. BTB123456789US)
+//   UPS:  BTB + 9 digits + UPS  (e.g. BTB123456789UPS)
+function makeTracking(carrier) {
+  const c = carrier === 'UPS' ? 'UPS' : 'USPS';
+  return 'BTB' + String(Math.floor(Math.random() * 900000000) + 100000000) + (c === 'UPS' ? 'UPS' : 'US');
+}
 // QR code text for a won/sold item: the exact sale, so scanning it opens that
 // sold item page (the app opens ?item= on load). Short param names keep the QR small.
-function qrTextFor(l, receiptNo, tracking) {
-  return 'https://bringtimebackandmore.com/?i=' + l.id + '&r=' + (receiptNo || '') + '&t=' + (tracking || '');
+// &c= is the carrier (USPS or UPS) so the scan shows the correct carrier.
+function qrTextFor(l, receiptNo, tracking, carrier) {
+  return 'https://bringtimebackandmore.com/?i=' + l.id + '&r=' + (receiptNo || '') + '&t=' + (tracking || '') + '&c=' + (carrier || carrierFor(l.package_size));
 }
-function makeTracking() { return 'BTB' + String(Math.floor(Math.random() * 900000000) + 100000000) + 'US'; }
 async function qrForListing(l) {
   if (!l || l.status !== 'sold' || l.payment_status !== 'validated') return null;
   const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   if (!receipt) return null;
-  return { qrText: qrTextFor(l, receipt.receipt_no, l.tracking || ''), receiptNo: receipt.receipt_no, tracking: l.tracking || '' };
+  const carrier = l.carrier || carrierFor(l.package_size);
+  return { qrText: qrTextFor(l, receipt.receipt_no, l.tracking || '', carrier), receiptNo: receipt.receipt_no, tracking: l.tracking || '', carrier };
 }
 const BANNED = ['stolen','counterfeit','fake id','illegal drugs','weapon','firearm','explosives','human trafficking','stolen goods'];
 const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Vehicles','Home','Fashion','Art','Sports','Toys','Other'];
@@ -172,7 +184,7 @@ app.get('/api/listings/:id', async (req, res) => {
   const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   const qr = await qrForListing(l);
   const wheelItems = l.type === 'wheel' ? await wheelItemsFor(l.id) : [];
-  res.json({ ...l, bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, package_label: shipLabel(l.package_size) });
+  res.json({ ...l, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size) });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -180,7 +192,7 @@ app.get('/api/listings/:id/qr', async (req, res) => {
   if (!l) return res.json({ ok: false, error: 'not found' });
   const qr = await qrForListing(l);
   if (!qr) return res.json({ ok: false, error: 'no QR code yet — the item has not been won and paid for' });
-  res.json({ ok: true, listingId: l.id, title: l.title, seller: l.seller, winner: l.winner, packageSize: l.package_size || '', packageLabel: shipLabel(l.package_size), shipping: l.shipping, tracking: qr.tracking, receiptNo: qr.receiptNo, qrText: qr.qrText, note: 'Shipment record / scan-to-identify code — not real USPS postage yet. Scan it to open this exact sale, then tap Mark as shipped.' });
+  res.json({ ok: true, listingId: l.id, title: l.title, seller: l.seller, winner: l.winner, packageSize: l.package_size || '', packageLabel: shipLabel(l.package_size), shipping: l.shipping, carrier: qr.carrier, tracking: qr.tracking, receiptNo: qr.receiptNo, qrText: qr.qrText, note: 'Shipment record / scan-to-identify code — not real ' + qr.carrier + ' postage yet. Scan it to open this exact sale, then tap Mark as shipped.' });
 });
 app.post('/api/listings', async (req, res) => {
   const b = req.body || {};
@@ -210,7 +222,7 @@ app.post('/api/listings', async (req, res) => {
   const img = typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '';
   await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url,package_size)
     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17,$18)`,
-    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, b.carrier || '', auth, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '']);
+    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '']);
   for (let i = 0; i < wheelItems.length; i++) {
     await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
       [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
@@ -259,12 +271,14 @@ async function completeSale(l, buyer, method, detail) {
   const receiptNo = 'BTB-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000);
   // Every paid sale gets a tracking code right away, so its QR code (and Label Pass)
   // identify that exact sale — the seller scans the QR to find this order, not another.
-  const tracking = l.tracking || makeTracking();
-  await query("UPDATE listings SET status='sold', winner=$1, payment_status='validated', payment_method=$2, payment_last4=$3, payment_reason='', escrow_status='held_waiting_shipment', escrow_amount=$4, tracking=$5 WHERE id=$6",
-    [buyer, method, String(detail || '').replace(/\D/g, '').slice(-4) || '', total, tracking, l.id]);
+  // Carrier is automatic from package size: USPS, except Big box over 5 lb = UPS.
+  const carrier = carrierFor(l.package_size);
+  const tracking = l.tracking || makeTracking(carrier);
+  await query("UPDATE listings SET status='sold', winner=$1, payment_status='validated', payment_method=$2, payment_last4=$3, payment_reason='', escrow_status='held_waiting_shipment', escrow_amount=$4, tracking=$5, carrier=$6 WHERE id=$7",
+    [buyer, method, String(detail || '').replace(/\D/g, '').slice(-4) || '', total, tracking, carrier, l.id]);
   const exLabel = await queryOne('SELECT * FROM labels WHERE listing_id=$1', [l.id]);
   if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-    [uid(), l.id, l.carrier || 'USPS', tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
+    [uid(), l.id, carrier, tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
   await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [uid(), l.id, receiptNo, l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0), l.shipping || 0, total, nowISO()]);
   // Time Wheel: payment validated → the wheel spins now and lands on ONE item.
@@ -332,9 +346,10 @@ app.post('/api/listings/:id/mark-shipped', async (req, res) => {
   if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can mark this shipped' });
   if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until the item is sold and payment validates' });
   if (l.shipped_at) return res.json({ ok: false, error: 'already marked as shipped' });
-  const tracking = l.tracking || makeTracking();
-  await query('UPDATE listings SET tracking=$1, shipped_at=$2, escrow_status=$3 WHERE id=$4', [tracking, nowISO(), 'held_waiting_delivery', l.id]);
-  res.json({ ok: true, tracking, shippedAt: nowISO() });
+  const carrier = l.carrier || carrierFor(l.package_size);
+  const tracking = l.tracking || makeTracking(carrier);
+  await query('UPDATE listings SET tracking=$1, carrier=$2, shipped_at=$3, escrow_status=$4 WHERE id=$5', [tracking, carrier, nowISO(), 'held_waiting_delivery', l.id]);
+  res.json({ ok: true, tracking, carrier, shippedAt: nowISO() });
 });
 app.post('/api/listings/:id/ship', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
@@ -476,12 +491,16 @@ app.post('/api/one-box', async (req, res) => {
   res.json({ ok: true, seller, items: items.length, itemTotal, combinedShipping, total: itemTotal + combinedShipping, saved: items.reduce((s, l) => s + (l.shipping || 0), 0) - combinedShipping });
 });
 // Label Pass: test-only label record, no real carrier connected.
+// Carrier is automatic from the listing's package size: USPS, except Big box
+// over 5 lb = UPS. A carrier sent in the request is ignored.
 app.post('/api/labels', async (req, res) => {
-  const tracking = 'BTB' + String(Math.floor(Math.random() * 900000000) + 100000000) + 'US';
+  const l = req.body.listingId ? await queryOne('SELECT * FROM listings WHERE id=$1', [req.body.listingId]) : null;
+  const carrier = l ? carrierFor(l.package_size) : 'USPS';
+  const tracking = makeTracking(carrier);
   const code = 'LBL-' + uid().slice(0, 8).toUpperCase();
   await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-    [uid(), req.body.listingId, req.body.carrier || 'USPS', tracking, code, nowISO()]);
-  res.json({ ok: true, carrier: req.body.carrier || 'USPS', tracking, code, note: 'Test version only — no real carrier connected yet.' });
+    [uid(), req.body.listingId, carrier, tracking, code, nowISO()]);
+  res.json({ ok: true, carrier, tracking, code, note: 'Test version only — no real carrier connected yet.' });
 });
 // ---------- Receipts / refunds (photo + video required) ----------
 app.get('/api/receipt/:listingId', async (req, res) => {
