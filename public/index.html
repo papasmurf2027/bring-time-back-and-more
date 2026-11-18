@@ -33,7 +33,13 @@
 <p class="small">Regular: an outbid adds 10 seconds. Sudden Death: an outbid does NOT reset the timer.</p>
 <label><input type="checkbox" id="sInsured" style="width:auto"> Insured shipping (required)</label><br>
 <label><input type="checkbox" id="sAgree" style="width:auto"> I accept the Seller Agreement (required)</label><br>
-<button class="btn" onclick="createListing()">List it</button><p id="sellMsg"></p></section>
+<button class="btn" onclick="createListing()">List it</button><p id="sellMsg"></p>
+<div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:14px">
+<h3 style="margin-top:0">🎲 Random items — no picture needed</h3>
+<p class="small">Don't want to put a picture up? List numbered random items instead — buyers bid on Random Item 1, 2, 3, however many you want. You hold each one up live on camera, and what the winner gets is what you show live. Uses the same seller name, category, starting bid, timer, mode, package size, insured shipping and Seller Agreement above.</p>
+<label>Base name (optional — leave blank for "Random Item") <input id="sRandomBase" placeholder="e.g. Random Watch"></label>
+<label>How many random items (1 to 100) <input id="sRandomCount" type="number" value="3" min="1" max="100"></label>
+<button class="btn" onclick="createRandomItems()">Create random items</button><p id="randomMsg"></p></div></section>
 
 <section class="card"><h2>Join the waitlist</h2><p class="small">Founding sellers: first 10 get 0% until it goes live, then 5% forever. Everyone else pays 10%.</p>
 <label>Name <input id="wName"></label><label>Email <input id="wEmail"></label>
@@ -69,6 +75,7 @@
 <li>Live Now means live on camera + chat — watch the seller and hear them talk, and type in chat what you want to see.</li>
 <li>When someone buys or wins and pays, the seller gets a QR code for that exact sale. The QR names the carrier — USPS, or UPS for a Big box over 5 lb. Scan it to open the sale, then tap Mark as shipped. The QR is a shipment record — not real postage yet.</li>
 <li>⏰ Time Wheel: the seller loads the wheel with up to 100 items and buyers see them all before bidding. The winner pays the winning bid + shipping, the wheel spins and lands on one item — that item is what they get. No extra prize, no extra charge. Nobody buys a spot and nobody pays to spin.</li>
+<li>🎲 Random Items: if a seller doesn't want to put a picture up, they can auction numbered random items — Random Item 1, 2, 3, up to 100 — with no picture. The seller holds each item up live on camera. What the winner gets is what was shown live, and the seller types what it was on the sold item page — the video receipt then shows what they won.</li>
 <li>© 2026 Bring Time Back and More. All rights reserved. Name, logo, design, text and layout may not be copied, reused or reproduced without permission.</li>
 </ol><p class="small">Full rules, banned-items list and Seller Agreement are enforced by the server on every listing.</p></section>
 </main>

@@ -8,7 +8,8 @@ async function load(){
   document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.status==='live').map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${l.seller}</b> — ${l.title} — $${l.current_bid} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   let rows=o.listings.filter(l=>!curType||l.type===curType); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
-  document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>
+  document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>
+  ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${l.category} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel • '+l.mode:'Auction • '+l.mode} • ${l.seller}${l.type==='wheel'?` • ${l.wheel_count||0} items on the wheel`:''}</p>
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">Status: ${l.status} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
@@ -151,6 +152,27 @@ async function createListing(){
   const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
+// Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
+// no picture needed — the seller shows each one live on camera. Uses the
+// same seller name, category, starting bid, timer, mode, package size,
+// insured shipping and Seller Agreement as the sell form above.
+async function createRandomItems(){
+  const size=document.getElementById('sSize').value;
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked};
+  const r=await j('/api/listings',b);
+  document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${r.titles.join(', ')} — no picture, show each one live on camera.` : ('Error: '+r.error);
+  if(r.ok)load();
+}
+// Seller says what the winner actually won on a Random Item — the item they
+// held up live on camera. Saved on the listing, then shown on the receipt,
+// the video receipt and the ship-QR section.
+async function revealItem(id){
+  const seller=document.getElementById('cName').value;
+  const revealed=document.getElementById('revealedInput').value;
+  const r=await j('/api/listings/'+id+'/reveal',{seller,revealedItem:revealed});
+  if(!r.ok){alert('Error: '+r.error);return;}
+  openItem(id);
+}
 // ---------- Live video (WebRTC peer-to-peer, no paid service) ----------
 // Seller broadcasts their camera to each viewer in the room via RTCPeerConnection;
 // the server only relays small signalling messages (join / offer / answer / ICE).
@@ -277,7 +299,8 @@ async function openItem(id){
   liveListingId=id;
   const l=await j('/api/listings/'+id);
   const el=document.getElementById('detail'); el.scrollIntoView();
-  el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2><p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
+  el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2>${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
+  ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${(l.type==='auction'||l.type==='wheel')?`<p class="timer" id="cd"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <label>Your name <input id="bName"></label><label>Bid $ <input id="bAmt" type="number" value="${l.current_bid+1}"></label>
@@ -292,11 +315,11 @@ async function openItem(id){
   ${l.status==='ended'?`<p><b>Winner: ${l.winner||'—'}</b> — ${l.payment_status==='validated'?'Payment went through — in escrow hold':l.payment_status==='declined'?'Payment declined — buyer needs to fix payment':'Waiting for winner payment'}</p>
   ${l.payment_status==='declined'?`<div style="background:#c62828;padding:14px;border-radius:10px"><h3>PAYMENT DIDN'T GO THROUGH! Don't lose this sale — pick one</h3><button class="btn" onclick="fixPay('${l.id}')">Fix Payment</button><button class="btn" onclick="rerun('${l.id}','${l.seller}')">Rerun Auction</button></div>`:''}
   <label>Winner payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Venmo</option></select></label><label>Detail <input id="pDetail" value="4242424242424242"></label><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
-  ${l.receipt?`<p>Receipt ${l.receipt.receipt_no} — total $${l.receipt.total} — <a href="#" onclick="alert('Receipt ${l.receipt.receipt_no}: ${l.title}, $${l.receipt.total} paid, seller ${l.seller}, winner ${l.winner}');return false">Download receipt</a></p>${l.wheel_landed_item?`<p><b>You won: ${escHtml(l.wheel_landed_item)}</b> — the item the Time Wheel landed on. No extra prize, no extra charge.</p>`:''}`:''}
+  ${l.receipt?`<p>Receipt ${l.receipt.receipt_no} — total $${l.receipt.total} — <a href="#" onclick="alert('Receipt ${l.receipt.receipt_no}: ${l.title}, $${l.receipt.total} paid, seller ${l.seller}, winner ${l.winner}');return false">Download receipt</a></p>${l.wheel_landed_item?`<p><b>You won: ${escHtml(l.wheel_landed_item)}</b> — the item the Time Wheel landed on. No extra prize, no extra charge.</p>`:''}${l.revealed_item?`<p><b>You won: ${escHtml(l.revealed_item)}</b> — revealed live on camera (Random Item: ${escHtml(l.title)}).</p>`:l.is_random&&l.status==='sold'?`<p class="small">🎲 Video receipt: Random Item — revealed live on camera, seller to confirm what it was.</p>`:''}`:''}
   <p class="small">Package size: ${l.package_size?shipLabelOf(l.package_size)+' — $'+l.shipping+' shipping (buyer pays)':'Shipping $'+l.shipping+' (buyer pays)'} • <b>${shipViaText(l)}</b></p>
   ${l.qr_text?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>📦 Ship this order — scan the QR code</h3>
   <canvas id="shipQR" style="max-width:100%;background:#fff;border-radius:8px"></canvas>
-  <p><b>${l.title}</b>${l.wheel_landed_item?`<br>Item to ship: <b>${escHtml(l.wheel_landed_item)}</b> (what the Time Wheel landed on)`:''}<br>Winner: ${l.winner}<br>Winner address: address on file<br>Package: ${l.package_size?shipLabelOf(l.package_size):'—'} • Shipping $${l.shipping}<br><b>Carrier: ${carrierOf(l)}</b> — ${carrierOf(l)==='UPS'?'drop it off at UPS (over 5 lbs)':'drop it off at the post office (USPS)'}<br>Tracking: ${l.qr_tracking||l.tracking||'—'}<br>Receipt: ${l.qr_receipt||''}</p>
+  <p><b>${l.title}</b>${l.wheel_landed_item?`<br>Item to ship: <b>${escHtml(l.wheel_landed_item)}</b> (what the Time Wheel landed on)`:''}${l.revealed_item?`<br>Item to ship: <b>${escHtml(l.revealed_item)}</b> (revealed live on camera)`:l.is_random?`<br>Item to ship: random item — seller to confirm what it was`:''}<br>Winner: ${l.winner}<br>Winner address: address on file<br>Package: ${l.package_size?shipLabelOf(l.package_size):'—'} • Shipping $${l.shipping}<br><b>Carrier: ${carrierOf(l)}</b> — ${carrierOf(l)==='UPS'?'drop it off at UPS (over 5 lbs)':'drop it off at the post office (USPS)'}<br>Tracking: ${l.qr_tracking||l.tracking||'—'}<br>Receipt: ${l.qr_receipt||''}</p>
   <p class="small">Scan this code with your phone — it opens this exact sale, so you ship the right item and don't box up the wrong order. This QR is a shipment record, not real ${carrierOf(l)} postage yet.</p>
   ${l.shipped_at?`<p><span class="badge green">Marked as shipped ${l.shipped_at}</span></p>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}
   <p id="shipMsg" class="small"></p></div>`:''}
@@ -373,7 +396,7 @@ async function loadSoldQRs(){
   const rows=await j('/api/listings');
   const sold=rows.filter(l=>l.status==='sold'&&l.payment_status==='validated');
   if(!sold.length){el.innerHTML='<p class="small">No sold items yet — when someone buys or wins and pays, the QR code to ship it shows here.</p>';return;}
-  el.innerHTML=sold.map(l=>`<div class="card"><h3>${l.title}</h3><p>Winner: ${l.winner} • ${l.package_size?shipLabelOf(l.package_size):''} • <b>${shipViaText(l)}</b> • Tracking: ${l.tracking||'—'}</p><canvas id="dashQR-${l.id}" style="max-width:100%;background:#fff;border-radius:8px"></canvas><p class="small">Scan to open this exact sale, then tap Mark as shipped. Shipment record — not real ${carrierOf(l)} postage yet.</p><button class="btn ghost" onclick="openItem('${l.id}')">Open this sale</button></div>`).join('');
+  el.innerHTML=sold.map(l=>`<div class="card"><h3>${l.title}${l.revealed_item?` — won: ${escHtml(l.revealed_item)}`:''}</h3><p>Winner: ${l.winner} • ${l.package_size?shipLabelOf(l.package_size):''} • <b>${shipViaText(l)}</b> • Tracking: ${l.tracking||'—'}</p><canvas id="dashQR-${l.id}" style="max-width:100%;background:#fff;border-radius:8px"></canvas><p class="small">Scan to open this exact sale, then tap Mark as shipped. Shipment record — not real ${carrierOf(l)} postage yet.</p><button class="btn ghost" onclick="openItem('${l.id}')">Open this sale</button></div>`).join('');
   for(const l of sold){const det=await j('/api/listings/'+l.id);if(det.qr_text)drawQR(det.qr_text,document.getElementById('dashQR-'+l.id));}
 }
 // ---------- "We're live" email to the waitlist (owner dashboard) ----------
