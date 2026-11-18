@@ -24,7 +24,7 @@
 <label>Listing type <select id="sType"><option value="auction">Auction</option><option value="buy_now">List in Store (Buy Now Only)</option></select></label>
 <label>Starting bid $ <input id="sStart" type="number" value="10"></label>
 <label>Store fixed price $ <input id="sFixed" type="number" value="50"></label>
-<label>Shipping $ (buyers pay shipping) <input id="sShip" type="number" value="10"></label>
+<label>Package size — shipping is set by size, buyers pay it <select id="sSize"><option value="small">Small — under 4 oz — $4.47</option><option value="medium">Medium — 4–8 oz — $4.85</option><option value="large">Large — 8–12 oz — $5.25</option><option value="xl">XL — 12 oz–1 lb — $6.75</option><option value="box" selected>Box — 1–5 lb — $7.75</option><option value="bigbox">Big box — over 5 lb — $9.69+</option><option value="flat">Flat Rate box — $12.99</option><option value="envelope">Card envelope — $0.99</option></select></label><p class="small">Pick the size of the box/envelope you'll ship it in. The buyer pays that shipping. Big box over 5 lb is $9.69 and up — it varies by zone.</p>
 <label>Carrier <input id="sCarrier" placeholder="USPS / UPS / FedEx"></label>
 <label>Authenticity <select id="sAuth"><option>Authentic</option><option>Replica</option><option>Unbranded</option></select></label>
 <label>Timer <select id="sTimer"><option value="10">10 seconds</option><option value="30" selected>30 seconds</option><option value="120">2 minutes</option><option value="600">10 minutes (custom)</option></select></label>
@@ -40,6 +40,7 @@
 <button class="btn" onclick="joinWaitlist()">Join waitlist</button> <button class="btn ghost" onclick="claimFounding()">Claim a founding spot</button><p id="waitMsg"></p></section>
 
 <section class="card" id="dashSec" style="display:none"><h2>Owner Dashboard — Your money, tax put aside automatically</h2><div id="dash"></div>
+<h3>Sold items — QR codes to ship</h3><p class="small">Scan a code to open that exact sale, then tap Mark as shipped — so you don't box up the wrong order.</p><div id="soldQRs"></div>
 <label>Tax set-aside % <input id="taxPct" type="number" value="25"></label> <button class="btn" onclick="setTax()">Set tax %</button>
 <h3>Tell the waitlist we're live</h3>
 <p class="small">Emails everyone on the waitlist (BCC, so nobody sees anyone else's email). It will not email the same list twice unless you tap "Send again". If no email key is set, nothing is sent automatically — copy the list or use the mailto link to send it from your own email instead.</p>
@@ -57,14 +58,15 @@
 
 <section class="card"><h2>Rules — short version</h2><ol>
 <li>Owner is not responsible for refunds. Refunds only within 12 hours of receipt, for a legit reason only (not as described, damaged, wrong item, defective, never arrived). "Changed my mind" is not accepted.</li>
-<li>Shipping must be insured. Buyers pay shipping.</li>
+<li>Shipping must be insured. Buyers pay shipping — the price is set by package size: Small $4.47, Medium $4.85, Large $5.25, XL $6.75, Box 1–5 lb $7.75, Big box over 5 lb $9.69+, Flat Rate box $12.99, Card envelope $0.99.</li>
 <li>Winner's payment is checked first (test check only — no real processor yet) and held in escrow. Seller is paid only after delivery + 12 hours.</li>
 <li>To ask for a refund you must send BOTH a photo AND a video of the item. Winners get a receipt + video receipt as proof.</li>
 <li>Replicas / unbranded items must say so. A replica cannot be claimed as real. Banned items are blocked. Report a listing if something is wrong.</li>
 <li>Auctions: bid slider, custom bid, 10s / 30s / 2 min / custom timer. Sudden Death = outbid does not reset the timer. Regular = outbid adds 10 seconds.</li>
 <li>Store is Buy Now only — no bidding, no timer. No automatic Buy It Now in auctions; the seller may post a Buy It Now offer in chat.</li>
 <li>Founding sellers: first 10, 0% until it goes live, then 5% forever. Normal fee is 10% on the item price only, not shipping.</li>
-<li>Live Now means live in chat — no video yet.</li>
+<li>Live Now means live on camera + chat — watch the seller and hear them talk, and type in chat what you want to see.</li>
+<li>When someone buys or wins and pays, the seller gets a QR code for that exact sale. Scan it to open the sale, then tap Mark as shipped. The QR is a shipment record — not real USPS postage yet.</li>
 <li>© 2026 Bring Time Back and More. All rights reserved. Name, logo, design, text and layout may not be copied, reused or reproduced without permission.</li>
 </ol><p class="small">Full rules, banned-items list and Seller Agreement are enforced by the server on every listing.</p></section>
 </main>
