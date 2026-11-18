@@ -56,6 +56,7 @@ async function getSettings() {
 async function init() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   for (const st of schema.split(';')) { const t = st.trim(); if (t) { try { await query(t); } catch (e) { /* table may exist */ } } }
+  try { await query('ALTER TABLE listings ADD COLUMN image_url TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // Auto-end timers + draw free drops, every second.
@@ -120,9 +121,10 @@ app.post('/api/listings', async (req, res) => {
   const timer = Math.min(3600, Math.max(5, parseInt(b.timerSeconds || 30, 10) || 30));
   const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
   const id = uid();
-  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16)`,
-    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, Number(b.shipping), b.shippingInsured ? 1 : 0, b.carrier || '', auth, timer, b.mode || 'Regular', created.toISOString(), type === 'auction' ? ends.toISOString() : null]);
+  const img = typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '';
+  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17)`,
+    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, Number(b.shipping), b.shippingInsured ? 1 : 0, b.carrier || '', auth, timer, b.mode || 'Regular', created.toISOString(), type === 'auction' ? ends.toISOString() : null, img]);
   res.json({ ok: true, id });
 });
 // ---------- Bidding ----------
