@@ -100,6 +100,9 @@ async function init() {
   try { await query('ALTER TABLE listings ADD COLUMN wheel_landed_item TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN wheel_landed_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN wheel_spun INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN is_random INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN revealed_item TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN revealed_at TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // ---------- Time Wheel ----------
@@ -192,11 +195,34 @@ app.get('/api/listings/:id/qr', async (req, res) => {
   if (!l) return res.json({ ok: false, error: 'not found' });
   const qr = await qrForListing(l);
   if (!qr) return res.json({ ok: false, error: 'no QR code yet — the item has not been won and paid for' });
-  res.json({ ok: true, listingId: l.id, title: l.title, seller: l.seller, winner: l.winner, packageSize: l.package_size || '', packageLabel: shipLabel(l.package_size), shipping: l.shipping, carrier: qr.carrier, tracking: qr.tracking, receiptNo: qr.receiptNo, qrText: qr.qrText, note: 'Shipment record / scan-to-identify code — not real ' + qr.carrier + ' postage yet. Scan it to open this exact sale, then tap Mark as shipped.' });
+  res.json({ ok: true, listingId: l.id, title: l.title, seller: l.seller, winner: l.winner, isRandom: !!l.is_random, revealedItem: l.revealed_item || null, itemToShip: l.revealed_item || l.title, packageSize: l.package_size || '', packageLabel: shipLabel(l.package_size), shipping: l.shipping, carrier: qr.carrier, tracking: qr.tracking, receiptNo: qr.receiptNo, qrText: qr.qrText, note: 'Shipment record / scan-to-identify code — not real ' + qr.carrier + ' postage yet. Scan it to open this exact sale, then tap Mark as shipped.' });
 });
+// ---------- Random Items (numbered, no picture needed) ----------
+// A seller who does not want to put a picture up can auction numbered random
+// items — Random Item 1, Random Item 2, Random Item 3, up to however many they
+// want (1–100). Each is a normal auction with no photo; the seller holds the
+// item up live on camera, and what the winner gets is what was shown live.
+// The seller then types the actual item ("What they won") on the sold item
+// page — that revealed item is saved on the listing and shown on the winner
+// receipt, the video receipt record and the ship-QR section.
+async function insertListing(b, title, description, type, wheelItems, shipAmt, sizePrice, auth, timer, isRandom) {
+  const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
+  const id = uid();
+  const img = isRandom ? '' : (typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '');
+  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17,$18,$19)`,
+    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0]);
+  for (let i = 0; i < wheelItems.length; i++) {
+    await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+      [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
+  }
+  return id;
+}
 app.post('/api/listings', async (req, res) => {
   const b = req.body || {};
-  if (!b.seller || !b.title) return res.json({ ok: false, error: 'seller and title are required' });
+  const isRandom = !!(b.isRandom || b.random || b.randomCount);
+  if (!b.seller) return res.json({ ok: false, error: 'seller name is required' });
+  if (!isRandom && !b.title) return res.json({ ok: false, error: 'seller and title are required' });
   if (!b.agreement) return res.json({ ok: false, error: 'Seller Agreement must be accepted' });
   // Shipping is set by package size; a plain $ amount is still accepted for
   // backwards compatibility (older clients / API callers without a size).
@@ -204,9 +230,27 @@ app.post('/api/listings', async (req, res) => {
   const shipAmt = sizePrice !== null ? sizePrice : Number(b.shipping);
   if (!shipAmt && shipAmt !== 0) return res.json({ ok: false, error: 'pick a package size — buyers pay shipping by size' });
   if (!b.shippingInsured) return res.json({ ok: false, error: 'insured shipping is required' });
+  const auth = b.authenticity || 'Authentic';
+  const timer = Math.min(3600, Math.max(5, parseInt(b.timerSeconds || 30, 10) || 30));
+  if (isRandom) {
+    // One tap creates N separate auctions: "Random Item 1", "Random Item 2", …
+    // (or "<base> 1", "<base> 2", … if the seller typed a base name, e.g. "Random Watch").
+    const count = Math.floor(Number(b.randomCount || b.count || 0));
+    if (!count || count < 1 || count > 100) return res.json({ ok: false, error: 'pick how many random items — 1 to 100' });
+    const base = String(b.randomBase || b.title || 'Random Item').trim().replace(/\s+\d+$/, '').slice(0, 100) || 'Random Item';
+    const badBase = bannedHit(base);
+    if (badBase) return res.json({ ok: false, error: 'banned item: ' + badBase });
+    const desc = 'Random item — no picture. The seller holds it up live on camera. What you win is what they show live.' + (auth !== 'Authentic' ? ' (' + auth + ')' : '');
+    const ids = [], titles = [];
+    for (let i = 1; i <= count; i++) {
+      const title = base + ' ' + i;
+      const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, auth, timer, true);
+      ids.push(id); titles.push(title);
+    }
+    return res.json({ ok: true, ids, titles, count, isRandom: true });
+  }
   const bad = bannedHit(b.title + ' ' + (b.description || ''));
   if (bad) return res.json({ ok: false, error: 'banned item: ' + bad });
-  const auth = b.authenticity || 'Authentic';
   const text = (b.title + ' ' + (b.description || '')).toLowerCase();
   if (auth === 'Replica' && /100% authentic|genuine real|authentic genuine/.test(text)) return res.json({ ok: false, error: 'a replica cannot be claimed as real/authentic' });
   if (auth === 'Authentic' && /replica|not real|fake/.test(text)) return res.json({ ok: false, error: 'an Authentic listing cannot describe itself as a replica' });
@@ -216,18 +260,24 @@ app.post('/api/listings', async (req, res) => {
   const wheelItems = type === 'wheel' ? parseWheelItems(b) : [];
   if (type === 'wheel' && !wheelItems.length) return res.json({ ok: false, error: 'a Time Wheel needs at least 1 item on it (up to 100) — one per line' });
   if (wheelItems.length > 100) return res.json({ ok: false, error: 'a Time Wheel holds at most 100 items' });
-  const timer = Math.min(3600, Math.max(5, parseInt(b.timerSeconds || 30, 10) || 30));
-  const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
-  const id = uid();
-  const img = typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '';
-  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url,package_size)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17,$18)`,
-    [id, b.seller, b.title, b.description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '']);
-  for (let i = 0; i < wheelItems.length; i++) {
-    await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-      [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
-  }
+  const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false);
   res.json({ ok: true, id, wheelCount: wheelItems.length });
+});
+// Seller records what the winner actually won on a random item — the item
+// they held up live on camera. Seller-only, only after the item is won and
+// paid for. Shown on the receipt, the video receipt and the ship-QR section.
+app.post('/api/listings/:id/reveal', async (req, res) => {
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!l.is_random) return res.json({ ok: false, error: 'this is not a Random Item' });
+  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can say what the winner won' });
+  if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the winner has to win and pay first — then say what they won' });
+  const revealed = String(req.body.revealedItem || req.body.revealed || '').trim().slice(0, 120);
+  if (!revealed) return res.json({ ok: false, error: 'type what they won — e.g. Invicta Lupah watch' });
+  await query('UPDATE listings SET revealed_item=$1, revealed_at=$2 WHERE id=$3', [revealed, nowISO(), l.id]);
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+    [uid(), l.id, l.seller, `🎲 Revealed live on camera: ${revealed} — that is what ${l.winner} won.`, nowISO()]);
+  res.json({ ok: true, revealedItem: revealed });
 });
 // ---------- Bidding ----------
 app.post('/api/listings/:id/bid', async (req, res) => {
@@ -333,7 +383,7 @@ app.post('/api/listings/:id/rerun', async (req, res) => {
   const created = new Date(); const ends = new Date(created.getTime() + (l.timer_seconds || 30) * 1000);
   await query('DELETE FROM bids WHERE listing_id=$1', [l.id]);
   await query(`UPDATE listings SET status='live', winner=NULL, payment_status='none', payment_reason='', escrow_status='not_started', escrow_amount=0,
-    current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL, shipped_at=NULL, wheel_landed_item='', wheel_landed_at=NULL, wheel_spun=0 WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
+    current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL, shipped_at=NULL, wheel_landed_item='', wheel_landed_at=NULL, wheel_spun=0, revealed_item='', revealed_at=NULL WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
   res.json({ ok: true, endsAt: ends.toISOString() });
 });
 // ---------- Shipping / escrow release ----------
@@ -510,7 +560,18 @@ app.get('/api/receipt/:listingId', async (req, res) => {
   // A Time Wheel receipt names the item the wheel landed on — that is what
   // the winner gets — not just the wheel's title.
   const landed = l.type === 'wheel' && l.wheel_landed_item ? l.wheel_landed_item : null;
-  res.json({ ok: true, receiptNo: r.receipt_no, item: landed ? landed + ' (from Time Wheel: ' + l.title + ')' : l.title, landedItem: landed, winningBid: r.amount, shipping: r.shipping, total: r.total, seller: l.seller, winner: l.winner, dateWon: r.created_at, paymentStatus: l.payment_status, escrowStatus: l.escrow_status, sellerLive: !!l.seller_live, bidCount: (await query('SELECT COUNT(*) AS n FROM bids WHERE listing_id=$1', [l.id]))[0].n });
+  // A Random Item receipt names what the seller revealed live on camera —
+  // that is what the winner actually won. Until the seller types it in, the
+  // receipt says so plainly instead of guessing.
+  const revealed = l.is_random && l.revealed_item ? l.revealed_item : null;
+  const item = revealed ? revealed + ' (Random Item: ' + l.title + ')' : landed ? landed + ' (from Time Wheel: ' + l.title + ')' : l.title;
+  const bids = await query('SELECT bidder, amount, created_at FROM bids WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]);
+  const chats = await query('SELECT name, message, is_seller, created_at FROM chats WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]);
+  res.json({ ok: true, receiptNo: r.receipt_no, item, landedItem: landed, isRandom: !!l.is_random, revealedItem: revealed, revealedAt: l.revealed_at || null, winningBid: r.amount, shipping: r.shipping, total: r.total, seller: l.seller, winner: l.winner, dateWon: r.created_at, paymentStatus: l.payment_status, escrowStatus: l.escrow_status, sellerLive: !!l.seller_live, bidCount: bids.length,
+    // Video receipt: the live-room record of what was won — item as listed,
+    // what was revealed live, full bid history, whether the seller was live,
+    // and the room chat.
+    videoReceipt: { listedTitle: l.title, isRandom: !!l.is_random, revealedItem: revealed, revealedNote: revealed ? 'Revealed live: ' + revealed : 'Random Item — revealed live on camera, seller to confirm what it was', sellerWasLive: !!l.seller_live, bids, chats } });
 });
 app.post('/api/refunds', async (req, res) => {
   const b = req.body || {};

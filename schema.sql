@@ -16,7 +16,8 @@ CREATE TABLE IF NOT EXISTS listings (
   tracking TEXT, delivered INTEGER DEFAULT 0, delivered_at TEXT, seller_live INTEGER DEFAULT 0, seller_live_at TEXT,
   buy_now_offer REAL, buy_now_offer_by TEXT, image_url TEXT DEFAULT '',
   package_size TEXT DEFAULT '', shipped_at TEXT,
-  wheel_landed_item TEXT DEFAULT '', wheel_landed_at TEXT, wheel_spun INTEGER DEFAULT 0
+  wheel_landed_item TEXT DEFAULT '', wheel_landed_at TEXT, wheel_spun INTEGER DEFAULT 0,
+  is_random INTEGER DEFAULT 0, revealed_item TEXT DEFAULT '', revealed_at TEXT
 );
 CREATE TABLE IF NOT EXISTS bids (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, bidder TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL
