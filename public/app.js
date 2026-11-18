@@ -8,7 +8,7 @@ async function load(){
   document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.status==='live').map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${l.seller}</b> — ${l.title} — $${l.current_bid} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   let rows=o.listings.filter(l=>!curType||l.type===curType); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
-  document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>
+  document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${l.category} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel • '+l.mode:'Auction • '+l.mode} • ${l.seller}${l.type==='wheel'?` • ${l.wheel_count||0} items on the wheel`:''}</p>
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
@@ -25,6 +25,64 @@ function shipLabelOf(s){return (SHIP_SIZES[s]||{}).label||'';}
 // The carrier is automatic from package size — the seller never picks it.
 function carrierOf(l){return l.carrier||(l.package_size==='bigbox'?'UPS':'USPS');}
 function shipViaText(l){const c=carrierOf(l);return c==='UPS'?'Ships via UPS (over 5 lbs)':'Ships via USPS';}
+// ---------- Hourglass timer (gold + dark navy, like the hourglass in the logo) ----------
+// The timer is an hourglass: gold sand runs from the top bulb to the bottom
+// bulb as time runs out, and the digital time sits in the middle on a gold
+// plaque. The sand level and the digits are driven by the same real
+// countdown (ends_at) the server already sends — timer rules are unchanged:
+// Regular adds 10s per outbid (ends_at moves, so the sand refills by that
+// amount), Sudden Death does not reset it. Total time is ends_at minus
+// created_at, so a Regular extension grows the total and the sand refills.
+function hgFmt(ms){
+  if(ms<=0)return '00:00';
+  const s=Math.ceil(ms/1000), h=Math.floor(s/3600), m=Math.floor((s%3600)/60), sec=s%60;
+  const p=n=>String(n).padStart(2,'0');
+  return h>0?p(h)+':'+p(m)+':'+p(sec):p(m)+':'+p(sec);
+}
+function hourglassSVG(uid,endsAt,createdAt,cls){
+  const safe=String(uid).replace(/[^a-zA-Z0-9_-]/g,'');
+  const glass='M32 22 L88 22 C92 42 84 62 62 78 C84 94 92 116 88 138 L32 138 C28 116 36 94 58 78 C36 62 28 42 32 22 Z';
+  return '<svg class="hg '+(cls||'')+'" data-hg-ends="'+escHtml(endsAt||'')+'" data-hg-created="'+escHtml(createdAt||'')+'" viewBox="0 0 120 168" role="timer" aria-label="Auction timer">'
+  +'<defs><clipPath id="hgClip-'+safe+'"><path d="'+glass+'"/></clipPath>'
+  +'<linearGradient id="hgSand-'+safe+'" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#f5d76e"/><stop offset="0.6" stop-color="#d4a017"/><stop offset="1" stop-color="#a67c00"/></linearGradient></defs>'
+  +'<rect x="16" y="14" width="6" height="140" rx="3" fill="#c9a227"/><rect x="98" y="14" width="6" height="140" rx="3" fill="#c9a227"/>'
+  +'<rect x="22" y="6" width="76" height="8" rx="3" fill="#c9a227"/><rect x="22" y="154" width="76" height="8" rx="3" fill="#c9a227"/>'
+  +'<path d="'+glass+'" fill="#dfeaf5" fill-opacity="0.12" stroke="#c9a227" stroke-width="2.5"/>'
+  +'<rect class="hg-topSand" x="28" y="22" width="64" height="56" fill="url(#hgSand-'+safe+')" clip-path="url(#hgClip-'+safe+')"/>'
+  +'<rect class="hg-botSand" x="28" y="138" width="64" height="0" fill="url(#hgSand-'+safe+')" clip-path="url(#hgClip-'+safe+')"/>'
+  +'<rect class="hg-stream" x="58.5" y="76" width="3" height="12" fill="#e8b64c"/>'
+  +'<rect class="hg-plaque" x="10" y="70" width="100" height="28" rx="7" fill="#c9a227" stroke="#f5d76e" stroke-width="1.5"/>'
+  +'<text class="hg-digits" x="60" y="89" text-anchor="middle" font-size="19" font-weight="800" fill="#081426" font-family="system-ui,-apple-system,Segoe UI,Arial,sans-serif">--:--</text>'
+  +'</svg>';
+}
+function updateHourglasses(){
+  document.querySelectorAll('svg.hg[data-hg-ends]').forEach(svg=>{
+    const ends=new Date(svg.dataset.hgEnds).getTime();
+    if(!ends)return;
+    const created=new Date(svg.dataset.hgCreated||'').getTime();
+    const total=(created&&ends>created)?(ends-created):0;
+    const ms=ends-Date.now();
+    const frac=total>0?Math.max(0,Math.min(1,ms/total)):(ms>0?1:0);
+    const digits=svg.querySelector('.hg-digits');
+    if(digits)digits.textContent=hgFmt(ms);
+    const top=svg.querySelector('.hg-topSand');
+    if(top){const h=56*frac;top.setAttribute('y',String(78-h));top.setAttribute('height',String(h));}
+    const bot=svg.querySelector('.hg-botSand');
+    if(bot){const h=56*(1-frac);bot.setAttribute('y',String(138-h));bot.setAttribute('height',String(h));}
+    const stream=svg.querySelector('.hg-stream');
+    if(stream)stream.style.display=(ms>0&&frac>0)?'':'none';
+    const ended=ms<=0;
+    const plaque=svg.querySelector('.hg-plaque');
+    if(plaque)plaque.setAttribute('fill',ended?'#c62828':'#c9a227');
+    if(digits)digits.setAttribute('fill',ended?'#ffffff':'#081426');
+    svg.classList.toggle('hg-ended',ended);
+  });
+  const room=document.querySelector('svg.hg-room');
+  const st=document.getElementById('cdState');
+  if(room&&st){const ms=new Date(room.dataset.hgEnds).getTime()-Date.now();st.textContent=ms>0?'Gold sand running down — time left in this auction.':'Auction ended.';}
+}
+if(!window._hgTick){window._hgTick=setInterval(updateHourglasses,250);}
+
 
 // ---------- QR codes (vendored, no dependency, no external QR API) ----------
 // Small QR Code generator: byte mode, error-correction level M, versions 1–9.
@@ -302,7 +360,7 @@ async function openItem(id){
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2>${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
-  ${(l.type==='auction'||l.type==='wheel')?`<p class="timer" id="cd"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
+  ${(l.type==='auction'||l.type==='wheel')?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <label>Your name <input id="bName"></label><label>Bid $ <input id="bAmt" type="number" value="${l.current_bid+1}"></label>
   <button class="btn" onclick="bid('${l.id}',1)">+$1</button><button class="btn" onclick="bid('${l.id}',5)">+$5</button><button class="btn" onclick="bid('${l.id}',10)">+$10</button>
   <button class="btn" onclick="bidCustom('${l.id}')">Place custom bid</button>
@@ -338,7 +396,7 @@ async function openItem(id){
   <p><button class="btn ghost" onclick="report('${l.id}')">Report this listing</button> <button class="btn ghost" onclick="score('${l.seller}')">Seller Scorecard</button></p>
   <div id="itemMsg"></div></div>`;
   if(l.qr_text)drawQR(l.qr_text,document.getElementById('shipQR'));
-  if(l.ends_at){const t=setInterval(()=>{const ms=new Date(l.ends_at)-new Date();const e=document.getElementById('cd');if(!e){clearInterval(t);return;}e.textContent=ms>0?('⏱ '+Math.floor(ms/60000)+':'+String(Math.floor(ms/1000)%60).padStart(2,'0')):'Auction ended';},250);}
+  if(l.ends_at){updateHourglasses();}
   // Live video: re-attach after a re-render, or join as a viewer if the seller is live.
   if(wasLive&&liveRole==='seller'&&liveStream){
     const v=liveVideoEl(); if(v){v.srcObject=liveStream; v.style.display='block'; v.play().catch(()=>{});}

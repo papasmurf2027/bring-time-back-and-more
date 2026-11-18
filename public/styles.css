@@ -21,3 +21,11 @@ footer{padding:20px;text-align:center;color:#bcd0f5;border-top:1px solid #2c4a7a
 .chat{max-height:220px;overflow:auto;background:#081426;border-radius:8px;padding:10px}
 .chat p{margin:6px 0}.timer{font-size:28px;font-weight:900;color:#f5c542}
 h2{color:#f5c542}
+
+/* Hourglass timer — gold + dark navy, like the hourglass in the logo. */
+.hg{display:block}
+.hg-room{width:150px;max-width:60vw;height:auto;margin:0 auto}
+.hg-room-wrap{text-align:center;margin:6px 0}
+.hg-mini{width:64px;height:auto}
+.hg-mini-wrap{margin:6px 0}
+.hg-state{color:#bcd0f5;font-size:14px;text-align:center;margin:4px 0 0}
