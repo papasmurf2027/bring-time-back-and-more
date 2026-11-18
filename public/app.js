@@ -9,7 +9,7 @@ async function load(){
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   let rows=o.listings.filter(l=>!curType||l.type===curType); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
   document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>
-  <p>${l.category} • ${l.type==='buy_now'?'Store — Buy Now Only':'Auction • '+l.mode} • ${l.seller}</p>
+  <p>${l.category} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel • '+l.mode:'Auction • '+l.mode} • ${l.seller}${l.type==='wheel'?` • ${l.wheel_count||0} items on the wheel`:''}</p>
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • Insured shipping ✓</p>
   <p class="small">Status: ${l.status} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
@@ -143,7 +143,8 @@ window._photoData='';
 function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const img=new Image();const rd=new FileReader();rd.onload=e=>{img.onload=()=>{const max=800;const sc=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);c.getContext('2d').drawImage(img,0,0,c.width,c.height);window._photoData=c.toDataURL('image/jpeg',0.8);const p=document.getElementById('sPhotoPrev');p.src=window._photoData;p.style.display='block';};img.src=e.target.result;};rd.readAsDataURL(f);}
 async function createListing(){
   const size=document.getElementById('sSize').value;
-  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,carrier:document.getElementById('sCarrier').value,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||''};
+  const wheelItems=(document.getElementById('sWheel').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,carrier:document.getElementById('sCarrier').value,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
 // ---------- Live video (WebRTC peer-to-peer, no paid service) ----------
@@ -210,6 +211,62 @@ async function startSellerPoll(id){
   liveSince=new Date().toISOString();
   stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
 }
+// ---------- Time Wheel (Kevin's own design — a clock-face wheel, gold + dark navy) ----------
+// Items sit around the wheel like numbers on a clock; a gold hand at the top
+// points at the landed item. Nobody buys a spot, nobody pays to spin — the
+// winner pays the winning bid + shipping, the wheel lands on ONE item, and
+// that item is what they get. No extra prize, no extra charge.
+function wheelAngle(i,n){return n?i*360/n:0;}
+function wheelSVG(l,rotDeg){
+  const items=l.wheel_items||[];
+  if(!items.length)return '<p class="small">No items on this wheel yet.</p>';
+  const n=items.length, cx=160, cy=160, r=118;
+  const font=n<=12?13:n<=24?11:n<=48?9:7;
+  let texts='';
+  items.forEach((it,i)=>{
+    const a=wheelAngle(i,n)*Math.PI/180;
+    const x=cx+r*Math.sin(a), y=cy-r*Math.cos(a);
+    const label=String(it.name||'').slice(0,18);
+    texts+=`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#f5d76e" font-size="${font}" font-weight="600" transform="rotate(${wheelAngle(i,n)} ${x.toFixed(1)} ${y.toFixed(1)})">${escHtml(label)}</text>`;
+  });
+  return `<svg viewBox="0 0 320 320" style="width:100%;max-width:340px;display:block;margin:0 auto">
+  <circle cx="160" cy="160" r="152" fill="#0b1f3a" stroke="#c9a227" stroke-width="4"/>
+  <circle cx="160" cy="160" r="138" fill="none" stroke="#c9a227" stroke-width="1" opacity="0.5"/>
+  <g id="wheelDial" style="transform-origin:160px 160px;transform:rotate(${rotDeg||0}deg)">${texts}</g>
+  <circle cx="160" cy="160" r="34" fill="#c9a227"/><text x="160" y="157" text-anchor="middle" fill="#0b1f3a" font-size="11" font-weight="700">TIME</text><text x="160" y="171" text-anchor="middle" fill="#0b1f3a" font-size="11" font-weight="700">WHEEL</text>
+  <polygon points="160,2 148,26 172,26" fill="#f5d76e" stroke="#c9a227" stroke-width="1"/></svg>`;
+}
+function wheelPanel(l){
+  const items=l.wheel_items||[];
+  const landedIdx=items.findIndex(x=>x.name===l.wheel_landed_item);
+  const rot=l.wheel_spun&&landedIdx>=0?-wheelAngle(landedIdx,items.length):0;
+  let status='';
+  if(l.wheel_spun&&l.wheel_landed_item)status=`<p><b>⏰ The wheel landed on: ${escHtml(l.wheel_landed_item)}</b> — that is the item ${escHtml(l.winner||'the winner')} gets. No extra prize, no extra charge.</p>`;
+  else if(l.status==='sold'&&l.payment_status==='validated')status=`<p>The winner has paid — spin the wheel to see what they get.</p><button class="btn" onclick="spinWheel('${l.id}')">Spin the Time Wheel</button>`;
+  else if(l.status==='ended')status=`<p class="small">The wheel spins once the winner pays.</p>`;
+  else status=`<p class="small">Bidding is for the wheel — the winner pays the winning bid + shipping, then the wheel spins and lands on one item. That item is what they get.</p>`;
+  return `<div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:10px;background:#0b1f3a">
+  <h3 style="color:#f5d76e;margin-top:0">⏰ Time Wheel — ${items.length} item${items.length===1?'':'s'}</h3>
+  <p class="small" style="color:#f5d76e">You win the item the wheel lands on — no extra prize, no extra charge. Nobody buys a spot, nobody pays to spin.</p>
+  ${wheelSVG(l,rot)}
+  ${status}
+  <p id="wheelMsg" class="small"></p>
+  <details><summary class="small">See all ${items.length} items on the wheel</summary><ol class="small">${items.map(x=>`<li>${escHtml(x.name)}</li>`).join('')}</ol></details>
+  </div>`;
+}
+async function spinWheel(id){
+  const name=(document.getElementById('cName')&&document.getElementById('cName').value)||(document.getElementById('bName')&&document.getElementById('bName').value)||'';
+  const r=await j('/api/listings/'+id+'/spin',{name});
+  if(!r.ok){alert('Error: '+r.error);return;}
+  const l=await j('/api/listings/'+id);
+  const items=l.wheel_items||[];
+  const idx=Math.max(0,items.findIndex(x=>x.name===r.landedItem));
+  const target=360*6-wheelAngle(idx,items.length||1);
+  const dial=document.getElementById('wheelDial');
+  if(dial){dial.style.transition='transform 4s cubic-bezier(.15,.8,.25,1)';dial.style.transform=`rotate(${target}deg)`;}
+  const msg=document.getElementById('wheelMsg'); if(msg)msg.textContent='⏰ Spinning…';
+  setTimeout(()=>openItem(id),4300);
+}
 async function openItem(id){
   const wasLive=liveListingId===id&&(liveRole==='seller'||liveRole==='viewer');
   if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
@@ -217,7 +274,8 @@ async function openItem(id){
   const l=await j('/api/listings/'+id);
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2><p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
-  ${l.type==='auction'?`<p class="timer" id="cd"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
+  ${l.type==='wheel'?wheelPanel(l):''}
+  ${(l.type==='auction'||l.type==='wheel')?`<p class="timer" id="cd"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <label>Your name <input id="bName"></label><label>Bid $ <input id="bAmt" type="number" value="${l.current_bid+1}"></label>
   <button class="btn" onclick="bid('${l.id}',1)">+$1</button><button class="btn" onclick="bid('${l.id}',5)">+$5</button><button class="btn" onclick="bid('${l.id}',10)">+$10</button>
   <button class="btn" onclick="bidCustom('${l.id}')">Place custom bid</button>
@@ -230,11 +288,11 @@ async function openItem(id){
   ${l.status==='ended'?`<p><b>Winner: ${l.winner||'—'}</b> — ${l.payment_status==='validated'?'Payment went through — in escrow hold':l.payment_status==='declined'?'Payment declined — buyer needs to fix payment':'Waiting for winner payment'}</p>
   ${l.payment_status==='declined'?`<div style="background:#c62828;padding:14px;border-radius:10px"><h3>PAYMENT DIDN'T GO THROUGH! Don't lose this sale — pick one</h3><button class="btn" onclick="fixPay('${l.id}')">Fix Payment</button><button class="btn" onclick="rerun('${l.id}','${l.seller}')">Rerun Auction</button></div>`:''}
   <label>Winner payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Venmo</option></select></label><label>Detail <input id="pDetail" value="4242424242424242"></label><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
-  ${l.receipt?`<p>Receipt ${l.receipt.receipt_no} — total $${l.receipt.total} — <a href="#" onclick="alert('Receipt ${l.receipt.receipt_no}: ${l.title}, $${l.receipt.total} paid, seller ${l.seller}, winner ${l.winner}');return false">Download receipt</a></p>`:''}
+  ${l.receipt?`<p>Receipt ${l.receipt.receipt_no} — total $${l.receipt.total} — <a href="#" onclick="alert('Receipt ${l.receipt.receipt_no}: ${l.title}, $${l.receipt.total} paid, seller ${l.seller}, winner ${l.winner}');return false">Download receipt</a></p>${l.wheel_landed_item?`<p><b>You won: ${escHtml(l.wheel_landed_item)}</b> — the item the Time Wheel landed on. No extra prize, no extra charge.</p>`:''}`:''}
   <p class="small">Package size: ${l.package_size?shipLabelOf(l.package_size)+' — $'+l.shipping+' shipping (buyer pays)':'Shipping $'+l.shipping+' (buyer pays)'}</p>
   ${l.qr_text?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>📦 Ship this order — scan the QR code</h3>
   <canvas id="shipQR" style="max-width:100%;background:#fff;border-radius:8px"></canvas>
-  <p><b>${l.title}</b><br>Winner: ${l.winner}<br>Winner address: address on file<br>Package: ${l.package_size?shipLabelOf(l.package_size):'—'} • Shipping $${l.shipping}<br>Tracking: ${l.qr_tracking||l.tracking||'—'}<br>Receipt: ${l.qr_receipt||''}</p>
+  <p><b>${l.title}</b>${l.wheel_landed_item?`<br>Item to ship: <b>${escHtml(l.wheel_landed_item)}</b> (what the Time Wheel landed on)`:''}<br>Winner: ${l.winner}<br>Winner address: address on file<br>Package: ${l.package_size?shipLabelOf(l.package_size):'—'} • Shipping $${l.shipping}<br>Tracking: ${l.qr_tracking||l.tracking||'—'}<br>Receipt: ${l.qr_receipt||''}</p>
   <p class="small">Scan this code with your phone — it opens this exact sale, so you ship the right item and don't box up the wrong order. This QR is a shipment record, not real USPS postage yet.</p>
   ${l.shipped_at?`<p><span class="badge green">Marked as shipped ${l.shipped_at}</span></p>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}
   <p id="shipMsg" class="small"></p></div>`:''}
@@ -261,7 +319,7 @@ async function openItem(id){
   } else if(wasLive&&liveRole==='viewer'){
     const v=liveVideoEl(); if(v&&liveRemoteStream){v.srcObject=liveRemoteStream; v.muted=false; v.style.display='block'; v.play().catch(()=>{const b=document.getElementById('unmuteBtn'); if(b)b.style.display='inline-block';});}
     stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
-  } else if(l.seller_live&&l.type==='auction'){
+  } else if(l.seller_live&&(l.type==='auction'||l.type==='wheel')){
     startViewer(id);
   }
 }
@@ -269,7 +327,7 @@ async function bid(id,add){const l=await j('/api/listings/'+id);const r=await j(
 async function bidCustom(id){const r=await j('/api/listings/'+id+'/bid',{bidder:document.getElementById('bName').value||'Buyer',amount:Number(document.getElementById('bAmt').value)});alert(r.ok?`Bid placed: $${r.currentBid}`:'Error: '+r.error);openItem(id);}
 async function setTop(id){const r=await j('/api/top-limit',{listingId:id,buyer:document.getElementById('bName').value||'Buyer',maxAmount:Number(document.getElementById('tlAmt').value)});alert(r.ok?'My Top Limit set':'Error: '+r.error);}
 async function buyNow(id){const r=await j('/api/listings/'+id+'/buy-now',{buyer:document.getElementById('bName').value||'Buyer',method:document.getElementById('pMethod').value,detail:document.getElementById('pDetail').value});alert(r.ok?`Sale complete — $${r.total} in escrow. Receipt ${r.receiptNo}`:'Error: '+r.error);openItem(id);}
-async function payWinner(id){const r=await j('/api/listings/'+id+'/pay',{method:document.getElementById('pMethod').value,detail:document.getElementById('pDetail').value});alert(r.ok?`Payment went through — $${r.total} in escrow`:'Error: '+r.error);openItem(id);}
+async function payWinner(id){const r=await j('/api/listings/'+id+'/pay',{method:document.getElementById('pMethod').value,detail:document.getElementById('pDetail').value});alert(r.ok?(`Payment went through — $${r.total} in escrow`+(r.landedItem?` — the Time Wheel landed on: ${r.landedItem}`:'')):'Error: '+r.error);openItem(id);}
 async function markShipped(id){const seller=document.getElementById('cName').value;const r=await j('/api/listings/'+id+'/mark-shipped',{seller});const m=document.getElementById('shipMsg');if(m)m.textContent=r.ok?('Marked as shipped — tracking '+r.tracking):('Error: '+r.error);if(r.ok)openItem(id);}
 async function fixPay(id){const r=await j('/api/listings/'+id+'/notify-fix',{});alert(r.ok?'Fix-payment notice sent to the winner':'Error: '+r.error);}
 async function rerun(id,seller){const r=await j('/api/listings/'+id+'/rerun',{seller});alert(r.ok?'Auction rerun — live again at the same price/timer':'Error: '+r.error);openItem(id);}
