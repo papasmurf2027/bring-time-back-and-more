@@ -103,6 +103,8 @@ async function init() {
   try { await query('ALTER TABLE listings ADD COLUMN is_random INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN revealed_item TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN revealed_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query("ALTER TABLE waitlist ADD COLUMN welcome_email_status TEXT DEFAULT 'pending'"); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE waitlist ADD COLUMN welcome_sent_at TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // ---------- Time Wheel ----------
@@ -595,10 +597,57 @@ app.post('/api/founding/claim', async (req, res) => {
   await query('INSERT INTO founding(id,seller,claimed_at) VALUES($1,$2,$3)', [uid(), req.body.seller, nowISO()]);
   res.json({ ok: true, ...(await foundingStatus()) });
 });
+// ---------- Automatic welcome email when someone joins the waitlist ----------
+// Joining the waitlist automatically puts them on the list AND tries to email
+// them right away: "you're on the list, we'll email you when it goes live".
+// Same Resend pattern as the "we're live" email (no new dependency, plain
+// fetch). If no RESEND_API_KEY is set, the signup still succeeds — the joiner
+// is stored with welcome_email_status='pending' and the owner dashboard shows
+// who still needs a welcome; the launch email still covers them at launch.
+// A duplicate email joining twice is not a new join and gets no second welcome.
+const WELCOME_SUBJECT = "You're on the list — Bring Time Back and More";
+function welcomeEmailBody(name) {
+  const first = String(name || '').trim();
+  return 'Hi' + (first ? ' ' + first : '') + ',\n\nThanks for joining Bring Time Back and More — you\'re on the waitlist.\n\nWe\'ll email you when the site goes live, so you don\'t miss launch day.\n\nFounding sellers: first 10 get 0% until it goes live, then 5% forever. Everyone else pays 10%.\n\nList in 3 steps, bid in 1 tap: ' + LIVE_SITE + '\n\nSee you there,\nBring Time Back and More';
+}
+async function sendWelcomeEmail(name, email) {
+  // No key: nothing to send through — caller records 'pending', never fails the signup.
+  if (!process.env.RESEND_API_KEY) return { sent: false, mode: 'manual', error: 'no Resend key set' };
+  try {
+    const fromEmail = process.env.FROM_EMAIL || 'Bring Time Back and More <onboarding@resend.dev>';
+    // 10s timeout: a slow Resend must never hang the signup — it fails fast
+    // and the joiner is recorded 'failed' instead of waiting forever.
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: fromEmail, to: [email], subject: WELCOME_SUBJECT, text: welcomeEmailBody(name) }), signal: AbortSignal.timeout(10000) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { sent: false, mode: 'resend', error: 'Resend failed (' + r.status + '): ' + (data.message || JSON.stringify(data)) };
+    return { sent: true, mode: 'resend', resendId: data.id || null };
+  } catch (e) {
+    return { sent: false, mode: 'resend', error: 'Resend request failed: ' + e.message };
+  }
+}
 app.post('/api/waitlist', async (req, res) => {
-  await query('INSERT INTO waitlist(id,name,email,role,founding,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-    [uid(), req.body.name || '', req.body.email || '', req.body.role || 'buyer', req.body.founding ? 1 : 0, nowISO()]);
-  res.json({ ok: true });
+  const b = req.body || {};
+  const name = String(b.name || '').trim();
+  const email = String(b.email || '').trim().toLowerCase();
+  if (!email || !email.includes('@')) return res.json({ ok: false, error: 'a valid email is required to join the waitlist' });
+  // Duplicate guard (case-insensitive): already on the list — no second row, no second welcome.
+  const existing = await queryOne('SELECT * FROM waitlist WHERE LOWER(email)=$1', [email]);
+  if (existing) return res.json({ ok: true, alreadyJoined: true, welcomeEmail: 'already', message: "You're already on the list — we'll email you when it goes live." });
+  const id = uid();
+  await query('INSERT INTO waitlist(id,name,email,role,founding,created_at,welcome_email_status) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [id, name, email, b.role || 'buyer', b.founding ? 1 : 0, nowISO(), 'pending']);
+  const attempt = await sendWelcomeEmail(name, email);
+  if (attempt.sent) {
+    await query("UPDATE waitlist SET welcome_email_status='sent', welcome_sent_at=$1 WHERE id=$2", [nowISO(), id]);
+    return res.json({ ok: true, welcomeEmail: 'sent', resendId: attempt.resendId || null, message: "You're on the list! Check your email for a welcome note — we'll email you when it goes live." });
+  }
+  if (attempt.mode === 'resend') {
+    // Resend was tried and refused it (e.g. bad key) — record 'failed', signup still stands.
+    await query("UPDATE waitlist SET welcome_email_status='failed' WHERE id=$1", [id]);
+    return res.json({ ok: true, welcomeEmail: 'failed', error: attempt.error, message: "You're on the list — we'll email you when it goes live." });
+  }
+  // No key: stored as 'pending' — the owner dashboard shows who still needs a welcome.
+  return res.json({ ok: true, welcomeEmail: 'manual', message: "You're on the list — we'll email you when it goes live." });
 });
 // ---------- "We're live" email to the waitlist (owner dashboard only) ----------
 // Automatic sending uses Resend (https://api.resend.com/emails) when RESEND_API_KEY
@@ -621,7 +670,17 @@ async function getLiveNoticePreview() {
   const seen = new Set(); const emails = [];
   for (const r of rows) { const e = String(r.email).trim().toLowerCase(); if (e.includes('@') && !seen.has(e)) { seen.add(e); emails.push(e); } }
   const sent = await queryOne('SELECT * FROM live_notice WHERE id=1');
-  return { count: emails.length, emails, subject: LIVE_SUBJECT, body: liveEmailBody(), mailto: emails.length ? liveMailto(emails) : '', resendConfigured: !!process.env.RESEND_API_KEY, sentAt: sent ? sent.sent_at : null, sentMode: sent ? sent.mode : null, sentCount: sent ? sent.recipient_count : null };
+  // Welcome-email status for the owner dashboard: who got a welcome email
+  // when they joined, and who is still waiting (no Resend key / send failed).
+  // Rows created before this column existed have a NULL status — count them as pending.
+  const welcomeRows = await query('SELECT name, email, welcome_email_status, welcome_sent_at FROM waitlist ORDER BY created_at ASC');
+  const welcomeSent = welcomeRows.filter(r => r.welcome_email_status === 'sent');
+  const welcomeFailed = welcomeRows.filter(r => r.welcome_email_status === 'failed');
+  const welcomePending = welcomeRows.filter(r => !r.welcome_email_status || r.welcome_email_status === 'pending');
+  return { count: emails.length, emails, subject: LIVE_SUBJECT, body: liveEmailBody(), mailto: emails.length ? liveMailto(emails) : '', resendConfigured: !!process.env.RESEND_API_KEY, sentAt: sent ? sent.sent_at : null, sentMode: sent ? sent.mode : null, sentCount: sent ? sent.recipient_count : null,
+    welcomeSent: welcomeSent.length, welcomePending: welcomePending.length, welcomeFailed: welcomeFailed.length,
+    welcomePendingEmails: welcomePending.map(r => ({ name: r.name || '', email: r.email })),
+    welcomeFailedEmails: welcomeFailed.map(r => ({ name: r.name || '', email: r.email })) };
 }
 app.get('/api/waitlist/live-notice', async (req, res) => res.json({ ok: true, ...(await getLiveNoticePreview()) }));
 app.post('/api/waitlist/live-notice', async (req, res) => {

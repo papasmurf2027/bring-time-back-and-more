@@ -33,7 +33,11 @@ CREATE TABLE IF NOT EXISTS drop_entries (id TEXT PRIMARY KEY, drop_id TEXT NOT N
 CREATE TABLE IF NOT EXISTS top_limits (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, buyer TEXT NOT NULL, max_amount REAL NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, seller TEXT NOT NULL, reviewer TEXT NOT NULL, stars INTEGER NOT NULL, comment TEXT DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shows (id TEXT PRIMARY KEY, seller TEXT NOT NULL, title TEXT NOT NULL, starts_at TEXT NOT NULL, created_at TEXT NOT NULL);
-CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, role TEXT DEFAULT 'buyer', founding INTEGER DEFAULT 0, created_at TEXT NOT NULL);
+-- welcome_email_status: 'sent' (welcome email sent via Resend), 'pending' (no
+-- Resend key set yet so the joiner is stored and still to be welcomed, and the
+-- launch email still covers them), or 'failed' (Resend was tried and refused it).
+-- welcome_sent_at records when a welcome email actually went out.
+CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, role TEXT DEFAULT 'buyer', founding INTEGER DEFAULT 0, created_at TEXT NOT NULL, welcome_email_status TEXT DEFAULT 'pending', welcome_sent_at TEXT);
 CREATE TABLE IF NOT EXISTS founding (id TEXT PRIMARY KEY, seller TEXT NOT NULL, claimed_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS refunds (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, requester TEXT NOT NULL, reason TEXT NOT NULL,
