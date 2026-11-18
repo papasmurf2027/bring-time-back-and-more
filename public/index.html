@@ -19,6 +19,7 @@
 <label>Your seller name <input id="sSeller" placeholder="e.g. Kevin"></label>
 <label>Title <input id="sTitle" placeholder="What are you selling?"></label>
 <label>Description <input id="sDesc" placeholder="Say what it is — replica / unbranded must say so here"></label>
+<label>Photo of the item <input id="sPhoto" type="file" accept="image/*" onchange="pickPhoto(this)"></label><img id="sPhotoPrev" style="display:none;max-width:100%;border-radius:10px;margin-top:6px" alt="Photo preview"><p class="small">Tap to pick a photo from your phone — it shows on the listing for buyers.</p>
 <label>Category <select id="sCat"></select></label>
 <label>Listing type <select id="sType"><option value="auction">Auction</option><option value="buy_now">List in Store (Buy Now Only)</option></select></label>
 <label>Starting bid $ <input id="sStart" type="number" value="10"></label>
