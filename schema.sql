@@ -57,14 +57,42 @@ CREATE TABLE IF NOT EXISTS founding (id TEXT PRIMARY KEY, seller TEXT NOT NULL, 
 -- mark-as-delivered step, no live carrier feed yet - at go-live a real
 -- carrier delivery scan does it automatically). Safety net: if the seller
 -- never confirms receipt, the refund auto-releases 48 hours after the return
--- was shipped. status values: 'pending' (seller deciding), 'awaiting_return',
--- 'approved' (refund released from the seller's escrow money), 'expired'.
+-- was shipped. return_due_at is the date the buyer must have shipped the
+-- return by (the payout date, or 7 days after the owner rules a wrong-item
+-- dispute in the seller's favour). Buyer return proof (Kevin, 2026-11-18):
+-- before the buyer can mark a return shipped they must attach a photo and a
+-- video of the item going into the box + a picture of the return label on
+-- the same box when it is sent out (return_video_name is the video,
+-- return_photo_name is the label picture) - that stops a seller claiming
+-- the wrong item came back when it did not. Wrong-item dispute (Kevin,
+-- 2026-11-18): after the return is shipped, the seller has 48 hours to flag
+-- "wrong item sent back" with a photo and a video of what actually arrived
+-- (dispute_photo_name, dispute_video_name, dispute_at) - that pauses the
+-- refund at once, the 48-hour auto-release stops, and the owner decides.
+-- dispute_status is 'correct' (the item was right - the claim was not
+-- upheld after review, recorded in incorrect_claims) or 'wrong' (the buyer
+-- did send the wrong item - refund denied until the right item is sent back). status
+-- values: 'pending' (seller deciding), 'awaiting_return', 'disputed'
+-- (wrong-item dispute open, refund paused), 'approved' (refund released from
+-- the seller's escrow money), 'expired'.
 CREATE TABLE IF NOT EXISTS refunds (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, requester TEXT NOT NULL, reason TEXT NOT NULL,
   photo_name TEXT, video_name TEXT, status TEXT DEFAULT 'pending', created_at TEXT NOT NULL,
   return_choice TEXT DEFAULT '', return_label_carrier TEXT DEFAULT '', return_label_tracking TEXT DEFAULT '',
   return_label_code TEXT DEFAULT '', return_cost REAL DEFAULT 0,
-  return_shipped_at TEXT, return_tracking TEXT DEFAULT '', return_received_at TEXT, return_delivered_at TEXT, decided_at TEXT
+  return_shipped_at TEXT, return_tracking TEXT DEFAULT '', return_received_at TEXT, return_delivered_at TEXT, decided_at TEXT,
+  dispute_photo_name TEXT DEFAULT '', dispute_video_name TEXT DEFAULT '', dispute_at TEXT, dispute_status TEXT DEFAULT '', dispute_decided_at TEXT, return_due_at TEXT,
+  return_photo_name TEXT DEFAULT '', return_video_name TEXT DEFAULT ''
+);
+-- Incorrect return claims (Kevin, 2026-11-18): if the owner rules a
+-- wrong-item dispute "item is correct", the claim was not upheld after
+-- review - one row is recorded here, the sale does not count as a clean
+-- sale, the seller drops a tier, and it is recorded on their Seller
+-- Scorecard as a 1-star owner review - selling privileges are suspended for
+-- 7 days for a first incorrect claim, 30 days for a second, and removed for
+-- good after a third
+CREATE TABLE IF NOT EXISTS incorrect_claims (
+  id TEXT PRIMARY KEY, seller TEXT NOT NULL, listing_id TEXT NOT NULL, refund_id TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, carrier TEXT NOT NULL, tracking TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, receipt_no TEXT NOT NULL, amount REAL NOT NULL, shipping REAL NOT NULL, total REAL NOT NULL, created_at TEXT NOT NULL);

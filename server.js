@@ -143,6 +143,14 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN return_received_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_delivered_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN dispute_photo_name TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN dispute_video_name TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN dispute_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN dispute_status TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN dispute_decided_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_due_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_photo_name TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_video_name TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // ---------- Time Wheel ----------
@@ -220,7 +228,9 @@ async function releaseRefund(rf, l, how) {
     ? 'The return was scanned as DELIVERED (tracking ' + (rf.return_tracking || rf.return_label_tracking || '') + ') — the refund is released from the seller\'s escrow money. No seller tap was needed.'
     : how === 'auto'
       ? 'The return was shipped 48 hours ago and the seller never confirmed receipt, so the refund released on its own from the seller\'s escrow money — the seller cannot stall it by not tapping.'
-      : 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.';
+      : how === 'dispute_correct'
+        ? 'The owner reviewed the seller\'s photo and video of what came back against the receipt and video receipt — the item sent back is the correct item, so the claim was not upheld, the dispute is closed, and the refund is released from the seller\'s escrow money.'
+        : 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.';
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, note, now]);
   return { ok: true, status: 'approved' };
@@ -245,11 +255,14 @@ async function expireRefundIfPast(l, rf) {
   // buyer did their part, so it waits for the 48-hour auto-release instead.
   if (rf.status === 'awaiting_return' && rf.return_shipped_at) return rf;
   const payout = await payoutFor(l);
-  if (payout.payoutAt && new Date() >= new Date(payout.payoutAt)) {
+  // Deadline is the payout date, unless the owner gave the buyer a new
+  // return deadline after a wrong-item decision - then that date is used.
+  const deadline = rf.return_due_at ? new Date(rf.return_due_at) : (payout.payoutAt ? new Date(payout.payoutAt) : null);
+  if (deadline && new Date() >= deadline) {
     await query("UPDATE refunds SET status='expired' WHERE id=$1", [rf.id]);
     if (l.escrow_status === 'held_refund_pending') await query("UPDATE listings SET escrow_status='held_refund_window' WHERE id=$1", [l.id]);
     await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-      [uid(), l.id, l.seller, 'Refund request expired — the refund window closed on the payout date and the item was not sent back, so no refund is given.', nowISO()]);
+      [uid(), l.id, l.seller, 'Refund request expired — the refund window closed and the item was not sent back, so no refund is given.', nowISO()]);
     return { ...rf, status: 'expired' };
   }
   return rf;
@@ -285,6 +298,20 @@ async function sweep() {
 setInterval(sweep, 1000);
 
 // ---------- Overview / listings ----------
+// While a seller's selling privileges are suspended (or removed), their
+// LIVE listings are hidden / paused: they do not show in browse or Live Now.
+// Sold / ended listings are not hidden - receipts, refunds and disputes
+// still need to be visible.
+async function hideSuspended(rows) {
+  const cache = {};
+  const out = [];
+  for (const l of rows) {
+    if (l.status !== 'live') { out.push(l); continue; }
+    if (!(l.seller in cache)) cache[l.seller] = await sellerStatus(l.seller);
+    if (cache[l.seller].canSell) out.push(l);
+  }
+  return out;
+}
 async function attachWheelCounts(rows) {
   if (!rows.length) return rows;
   const counts = await query('SELECT listing_id, COUNT(*) AS n FROM wheel_items GROUP BY listing_id');
@@ -294,7 +321,7 @@ async function attachWheelCounts(rows) {
 }
 app.get('/api/overview', async (req, res) => {
   const settings = await getSettings();
-  const listings = await attachWheelCounts(await query('SELECT * FROM listings ORDER BY created_at DESC'));
+  const listings = await attachWheelCounts(await hideSuspended(await query('SELECT * FROM listings ORDER BY created_at DESC')));
   const founding = await foundingStatus();
   const liveNow = listings.filter(l => l.seller_live && l.status === 'live');
   res.json({ name: 'Bring Time Back and More', prelaunch: !!settings.prelaunch, founding, taxPercent: settings.tax_percent, liveNowCount: liveNow.length, listings, categories: CATEGORIES });
@@ -304,6 +331,7 @@ app.get('/api/listings', async (req, res) => {
   if (req.query.type) rows = rows.filter(l => l.type === req.query.type);
   if (req.query.category && req.query.category !== 'All') rows = rows.filter(l => l.category === req.query.category);
   if (req.query.status) rows = rows.filter(l => l.status === req.query.status);
+  rows = await hideSuspended(rows);
   res.json(await attachWheelCounts(rows));
 });
 app.get('/api/listings/:id', async (req, res) => {
@@ -353,6 +381,12 @@ app.post('/api/listings', async (req, res) => {
   const b = req.body || {};
   const isRandom = !!(b.isRandom || b.random || b.randomCount);
   if (!b.seller) return res.json({ ok: false, error: 'seller name is required' });
+  // INCORRECT-CLAIM LADDER (Kevin, 2026-11-18): 1st incorrect return claim
+  // = selling privileges suspended for 7 days, 2nd = 30 days, 3rd = selling
+  // privileges removed for good. While suspended the seller cannot list.
+  const st = await sellerStatus(b.seller);
+  if (st.banned) return res.json({ ok: false, error: 'this seller cannot sell on the site again — selling privileges were removed after a third incorrect return claim' });
+  if (!st.canSell) return res.json({ ok: false, error: 'selling is suspended for this seller until ' + st.suspendedUntil + ' — selling privileges suspended after an incorrect return claim that was not upheld after review' });
   if (!isRandom && !b.title) return res.json({ ok: false, error: 'seller and title are required' });
   if (!b.agreement) return res.json({ ok: false, error: 'Seller Agreement must be accepted' });
   // No advertising another auction site / marketplace in a listing.
@@ -567,9 +601,33 @@ async function cleanSalesCount(seller) {
   let n = 0;
   for (const r of rows) {
     const bad = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [r.id]);
-    if (!bad) n++;
+    // A sale with an incorrect return claim that was not upheld after review
+    // never counts as a clean sale, even if it was otherwise released.
+    const badClaim = await queryOne("SELECT * FROM incorrect_claims WHERE listing_id=$1", [r.id]);
+    if (!bad && !badClaim) n++;
   }
   return n;
+}
+async function incorrectClaimsCount(seller) {
+  const rows = await query('SELECT * FROM incorrect_claims WHERE seller=$1', [seller]);
+  return rows.length;
+}
+// Incorrect return claim ladder (Kevin, 2026-11-18): 1st incorrect claim
+// (a wrong-item claim not upheld after review) = selling privileges
+// suspended for 7 days, 2nd = 30 days, 3rd = selling privileges removed for
+// good. While suspended the seller's live listings are hidden and they
+// cannot list new items. Strikes are counted in total, not per period.
+async function sellerStatus(seller) {
+  const rows = await query('SELECT * FROM incorrect_claims WHERE seller=$1 ORDER BY created_at ASC', [seller]);
+  const strikes = rows.length;
+  if (strikes >= 3) return { strikes, banned: true, suspendedUntil: null, suspensionDays: 0, canSell: false };
+  if (strikes >= 1) {
+    const days = strikes === 1 ? 7 : 30;
+    const latest = rows[rows.length - 1].created_at;
+    const suspendedUntil = new Date(new Date(latest).getTime() + days * 24 * 3600 * 1000).toISOString();
+    return { strikes, banned: false, suspendedUntil, suspensionDays: days, canSell: new Date() >= new Date(suspendedUntil) };
+  }
+  return { strikes: 0, banned: false, suspendedUntil: null, suspensionDays: 0, canSell: true };
 }
 async function sellerTier(seller) {
   const clean = await cleanSalesCount(seller);
@@ -579,9 +637,17 @@ async function sellerTier(seller) {
   let tier = 'New';
   if (clean >= 10 && (score === null || score >= 4.0)) tier = 'Top';
   else if (clean >= 3) tier = 'Trusted';
+  // INCORRECT-CLAIM PENALTY: a seller with an incorrect return claim that
+  // was not upheld after review drops a tier (Top becomes Trusted, Trusted
+  // becomes New). Recorded in incorrect_claims and on their Seller
+  // Scorecard (a 1-star owner review). The suspension ladder is separate
+  // (see sellerStatus): 7 days, 30 days, then selling privileges removed.
+  const incorrectClaims = await incorrectClaimsCount(seller);
+  if (incorrectClaims >= 1) tier = tier === 'Top' ? 'Trusted' : 'New';
   const nextTier = tier === 'New' ? 'Trusted' : tier === 'Trusted' ? 'Top' : null;
   const salesToNext = tier === 'New' ? Math.max(0, 3 - clean) : tier === 'Trusted' ? Math.max(0, 10 - clean) : 0;
-  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext };
+  const status = await sellerStatus(seller);
+  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext, incorrectClaims, strikes: status.strikes, suspendedUntil: status.suspendedUntil, suspensionDays: status.suspensionDays, banned: status.banned, canSell: status.canSell };
 }
 function payoutHoursFor(tier, amount) {
   if (tier === 'Top') return 12;
@@ -596,7 +662,7 @@ async function payoutFor(l) {
   const payoutAt = l.delivered_at ? new Date(new Date(l.delivered_at).getTime() + hours * 3600 * 1000).toISOString() : null;
   // Refund window closes at the payout date: same rule as the old 12-hour
   // rule (legit reason + photo + video), applied to the longer hold.
-  return { ...t, amount, payoutHours: hours, payoutLabel: payoutLabelFor(hours), payoutAt, refundDeadline: payoutAt, refundLabel: payoutLabelFor(hours) };
+  return { ...t, amount, payoutHours: hours, payoutLabel: payoutLabelFor(hours), payoutAt, refundDeadline: payoutAt, refundLabel: payoutLabelFor(hours), incorrectClaims: t.incorrectClaims, strikes: t.strikes, suspendedUntil: t.suspendedUntil, suspensionDays: t.suspensionDays, banned: t.banned, canSell: t.canSell };
 }
 app.post('/api/listings/:id/deliver', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
@@ -613,10 +679,10 @@ app.post('/api/listings/:id/release-escrow', async (req, res) => {
   if (l.escrow_status === 'refunded') return res.json({ ok: false, error: 'a refund was already given on this sale' });
   const payout = await payoutFor(l);
   await autoReleaseReturns();
-  const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [l.id]);
+  const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
   if (openRefund) await expireRefundIfPast(l, openRefund);
   if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout });
-  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [l.id]);
+  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
   if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
   await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
   res.json({ ok: true });
@@ -758,6 +824,20 @@ app.post('/api/labels', async (req, res) => {
   res.json({ ok: true, carrier, tracking, code, note: 'Test version only — no real carrier connected yet.' });
 });
 // ---------- Receipts / refunds (photo + video required) ----------
+// Receipt + video receipt for one listing, for comparing against a dispute:
+// item as listed, what was won, full bid history, whether the seller was
+// live, and the room chat. Returns null when there is no receipt yet.
+async function receiptFor(l) {
+  const r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
+  if (!r) return null;
+  const landed = l.type === 'wheel' && l.wheel_landed_item ? l.wheel_landed_item : null;
+  const revealed = l.is_random && l.revealed_item ? l.revealed_item : null;
+  const item = revealed ? revealed + ' (Random Item: ' + l.title + ')' : landed ? landed + ' (from Time Wheel: ' + l.title + ')' : l.title;
+  const bids = await query('SELECT bidder, amount, created_at FROM bids WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]);
+  const chats = await query('SELECT name, message, is_seller, created_at FROM chats WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]);
+  return { receiptNo: r.receipt_no, item, landedItem: landed, isRandom: !!l.is_random, revealedItem: revealed, revealedAt: l.revealed_at || null, winningBid: r.amount, shipping: r.shipping, total: r.total, seller: l.seller, winner: l.winner, dateWon: r.created_at, paymentStatus: l.payment_status, escrowStatus: l.escrow_status, sellerLive: !!l.seller_live, bidCount: bids.length,
+    videoReceipt: { listedTitle: l.title, isRandom: !!l.is_random, revealedItem: revealed, revealedNote: revealed ? 'Revealed live: ' + revealed : 'Random Item — revealed live on camera, seller to confirm what it was', sellerWasLive: !!l.seller_live, bids, chats } };
+}
 app.get('/api/receipt/:listingId', async (req, res) => {
   const r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [req.params.listingId]);
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.listingId]);
@@ -790,7 +870,7 @@ app.post('/api/refunds', async (req, res) => {
   const payout = await payoutFor(l);
   if (l.escrow_status === 'released' || (payout.payoutAt && new Date() >= new Date(payout.payoutAt))) return res.json({ ok: false, error: 'the refund window has closed — refunds close on the payout date (' + payout.payoutLabel + ' after delivery, ' + (payout.payoutAt || 'not set yet') + '), and no refund is possible after the seller is paid out', payout });
   if (!['not as described', 'damaged in transit', 'wrong item', 'defective', 'never arrived'].includes((b.reason || '').toLowerCase())) return res.json({ ok: false, error: 'a legit reason is required — "changed my mind" is not accepted' });
-  const open = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [b.listingId]);
+  const open = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [b.listingId]);
   if (open) return res.json({ ok: false, error: 'a refund request is already open for this sale — the seller is deciding' });
   await query('INSERT INTO refunds(id,listing_id,requester,reason,photo_name,video_name,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
     [uid(), b.listingId, b.requester || 'Buyer', b.reason, b.photoName, b.videoName, 'pending', nowISO()]);
@@ -803,7 +883,10 @@ app.get('/api/refunds/:id', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   await autoReleaseReturns();
   if (l) await expireRefundIfPast(l, rf);
-  res.json(withReturnDates(await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id])));
+  const fresh = withReturnDates(await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]));
+  // Owner comparison pack: the original receipt + video receipt, so the
+  // dispute can be checked against what was actually won and listed.
+  res.json({ ...fresh, receipt: l ? await receiptFor(l) : null });
 });
 // Seller decides what happens with a refund request. Seller-only, only while
 // the request is still pending (before the seller has decided).
@@ -837,8 +920,9 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
     const tracking = makeTracking(carrier);
     const code = 'RBL-' + uid().slice(0, 8).toUpperCase();
     const cost = Math.round((shipPrice(l.package_size) !== null ? shipPrice(l.package_size) : (l.shipping || 0)) * 100) / 100;
-    await query("UPDATE refunds SET return_choice='want_back', decided_at=$1, status='awaiting_return', return_label_carrier=$2, return_label_tracking=$3, return_label_code=$4, return_cost=$5 WHERE id=$6",
-      [nowISO(), carrier, tracking, code, cost, rf.id]);
+    const payout = await payoutFor(l);
+    await query("UPDATE refunds SET return_choice='want_back', decided_at=$1, status='awaiting_return', return_label_carrier=$2, return_label_tracking=$3, return_label_code=$4, return_cost=$5, return_due_at=$6 WHERE id=$7",
+      [nowISO(), carrier, tracking, code, cost, payout.payoutAt || null, rf.id]);
     await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
       [uid(), l.id, carrier, tracking, code, nowISO()]);
     await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
@@ -848,19 +932,27 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
   return res.json({ ok: false, error: 'choice must be no_return or want_back' });
 });
 // Buyer ships the item back using the return label. Only while the seller is
-// waiting for the item back. The buyer enters the return tracking (the label
-// tracking is the default) or just taps that they shipped it.
+// waiting for the item back. BUYER RETURN PROOF (Kevin, 2026-11-18): before
+// the buyer can mark the return shipped, they must attach a VIDEO of the
+// item going into the box AND a PICTURE of the return label on that same box
+// when it is sent out. The video proves what went in, the label picture
+// proves that same box with that label is the one that was sent. That proof
+// is stored on the refund record, so the owner can compare it against what
+// the seller says arrived. Both are required — no video or no label picture,
+// no shipped mark.
 app.post('/api/refunds/:id/return-shipped', async (req, res) => {
   const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'the seller has not asked for the item back' });
+  if (!req.body.videoName) return res.json({ ok: false, error: 'a video of the item going into the box is required before the return can be marked shipped' });
+  if (!req.body.photoName) return res.json({ ok: false, error: 'a picture of the return label on the same box, when it is sent out, is required before the return can be marked shipped' });
   await expireRefundIfPast(l, rf);
   const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
   if (fresh.status === 'expired') return res.json({ ok: false, error: 'the refund window has closed — this refund request has expired' });
   const tracking = String(req.body.tracking || rf.return_label_tracking || '').trim().slice(0, 100);
-  await query('UPDATE refunds SET return_tracking=$1, return_shipped_at=$2 WHERE id=$3', [tracking, nowISO(), rf.id]);
+  await query('UPDATE refunds SET return_tracking=$1, return_shipped_at=$2, return_photo_name=$3, return_video_name=$4 WHERE id=$5', [tracking, nowISO(), String(req.body.photoName).slice(0, 200), String(req.body.videoName).slice(0, 200), rf.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,0,$5)',
     [uid(), l.id, rf.requester || 'Buyer', 'Return shipped back — tracking ' + (tracking || 'on the return label') + '. The seller will confirm when they receive it.', nowISO()]);
   res.json({ ok: true, tracking });
@@ -898,6 +990,90 @@ app.post('/api/refunds/:id/return-delivered', async (req, res) => {
   const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
   await releaseRefund(fresh, l, 'delivered');
   res.json({ ok: true, status: 'approved', tracking, deliveredAt: fresh.return_delivered_at });
+});
+// ---------- Wrong-item dispute (Kevin, 2026-11-18) ----------
+// When a return is delivered / shipped back, the seller has 48 hours to
+// check what arrived. If it is the WRONG item (wrong item, empty box, a
+// different item than the receipt and video receipt show), the seller taps
+// "Wrong item sent back" and must attach a photo AND a video of what
+// actually arrived - same proof rule as refunds. No photo + video, the flag
+// is refused. Tapping it PAUSES the refund at once: status becomes
+// 'disputed', the 48-hour auto-release stops (it only runs on
+// 'awaiting_return'), the money stays in escrow, and no refund goes out
+// while the dispute is open. The owner decides in the dashboard, comparing
+// three things side by side: the buyer's return proof (a video of the item
+// going into the box + a picture of the return label on the same box when it
+// was sent out), the seller's arrival photo and video, and the original
+// receipt + video receipt.
+// INCORRECT-CLAIM LADDER (Kevin, 2026-11-18): if the owner rules "item is
+// correct", the claim was not upheld after review. That sale does NOT count
+// as a clean sale, the seller drops a tier, and it is recorded against
+// their Seller Scorecard. Selling privileges are suspended for 7 days for a
+// first incorrect claim, 30 days for a second, and removed for good after a
+// third. While suspended the seller's live listings are hidden and they
+// cannot list new items.
+app.post('/api/refunds/:id/wrong-item', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can flag a wrong item' });
+  if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
+  if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the buyer has not shipped the item back yet' });
+  if (!req.body.photoName) return res.json({ ok: false, error: 'a photo of what actually arrived is required — the flag is refused without both a photo and a video' });
+  if (!req.body.videoName) return res.json({ ok: false, error: 'a video of what actually arrived is required — the flag is refused without both a photo and a video' });
+  await query("UPDATE refunds SET status='disputed', dispute_photo_name=$1, dispute_video_name=$2, dispute_at=$3 WHERE id=$4",
+    [String(req.body.photoName).slice(0, 200), String(req.body.videoName).slice(0, 200), nowISO(), rf.id]);
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+    [uid(), l.id, l.seller, 'Seller flagged a wrong item sent back — the refund is PAUSED, the 48-hour auto-release is stopped, and the owner will decide. Seller proof of what arrived: photo ' + String(req.body.photoName).slice(0, 200) + ', video ' + String(req.body.videoName).slice(0, 200) + '.', nowISO()]);
+  res.json({ ok: true, status: 'disputed' });
+});
+// Owner decides a wrong-item dispute. decision 'correct' = the item sent
+// back IS the right item, so the claim was not upheld after review: the
+// dispute is closed, the refund releases at once, and the incorrect claim
+// is recorded (see the ladder above).
+// decision 'wrong' = the buyer DID send the wrong item: refund DENIED, the
+// buyer must send back the right item on a new tracked return label (seller
+// pays only because they asked for the item back - same rule) within 7 days,
+// or they get no refund.
+app.post('/api/refunds/:id/dispute-decide', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (rf.status !== 'disputed') return res.json({ ok: false, error: 'this refund has no open wrong-item dispute' });
+  const decision = String(req.body.decision || '');
+  if (decision !== 'correct' && decision !== 'wrong') return res.json({ ok: false, error: 'decision must be correct or wrong' });
+  if (decision === 'correct') {
+    await query("INSERT INTO incorrect_claims(id,seller,listing_id,refund_id,created_at) VALUES($1,$2,$3,$4,$5)",
+      [uid(), l.seller, l.id, rf.id, nowISO()]);
+    await query('INSERT INTO reviews(id,listing_id,seller,reviewer,stars,comment,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [uid(), l.id, l.seller, 'Bring Time Back and More', 1, 'Incorrect return claim — the owner reviewed the proof and the item sent back was the correct item.', nowISO()]);
+    await query("UPDATE refunds SET dispute_status='correct', dispute_decided_at=$1 WHERE id=$2", [nowISO(), rf.id]);
+    const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
+    await releaseRefund(fresh, l, 'dispute_correct');
+    const st = await sellerStatus(l.seller);
+    const penalty = st.banned
+      ? ' This is a third incorrect claim — selling privileges are removed and this seller cannot sell on the site again.'
+      : ' This is incorrect claim ' + st.strikes + ' for this seller — selling privileges are suspended for ' + st.suspensionDays + ' days, until ' + st.suspendedUntil + '.';
+    await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+      [uid(), l.id, l.seller, 'Owner reviewed the proof and the item sent back IS the correct item — the claim was not upheld, so the dispute is closed and the refund is released. Incorrect claim recorded against the seller: this sale does not count as a clean sale, the seller drops a tier, and it is recorded on their Seller Scorecard.' + penalty, nowISO()]);
+    return res.json({ ok: true, decision: 'correct', status: 'approved', incorrectClaims: st.strikes, strikes: st.strikes, suspendedUntil: st.suspendedUntil, suspensionDays: st.suspensionDays, banned: st.banned });
+  }
+  // Buyer DID send the wrong item: refund denied, new tracked return label
+  // for the RIGHT item, buyer has 7 days to send it back or no refund.
+  const carrier = carrierFor(l.package_size);
+  const tracking = makeTracking(carrier);
+  const code = 'RBL-' + uid().slice(0, 8).toUpperCase();
+  const cost = Math.round((shipPrice(l.package_size) !== null ? shipPrice(l.package_size) : (l.shipping || 0)) * 100) / 100;
+  const dueAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+  await query("UPDATE refunds SET dispute_status='wrong', dispute_decided_at=$1, status='awaiting_return', return_choice='want_back', return_label_carrier=$2, return_label_tracking=$3, return_label_code=$4, return_cost=$5, return_shipped_at=NULL, return_tracking='', return_received_at=NULL, return_delivered_at=NULL, return_photo_name='', return_video_name='', return_due_at=$6 WHERE id=$7",
+    [nowISO(), carrier, tracking, code, cost, dueAt, rf.id]);
+  await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+    [uid(), l.id, carrier, tracking, code, nowISO()]);
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+    [uid(), l.id, l.seller, 'Owner ruled the buyer DID send the wrong item — refund DENIED. A new tracked return label (' + carrier + ' ' + tracking + ') was sent so the buyer can send back the RIGHT item. The buyer has 7 days to send it back (by ' + dueAt + '), or no refund. The return label cost ($' + cost.toFixed(2) + ') is the seller\'s cost, only because the seller asked for the item back.', nowISO()]);
+  res.json({ ok: true, decision: 'wrong', status: 'awaiting_return', carrier, tracking, code, returnCost: cost, returnDueAt: dueAt });
 });
 // ---------- Founding / waitlist / dashboard / tax / report ----------
 app.post('/api/founding/claim', async (req, res) => {
@@ -1054,7 +1230,7 @@ app.get('/api/dashboard', async (req, res) => {
     const fee = Math.round(saleAmount(l) * pct) / 100;
     fees += fee;
     const delivered = l.delivered_at ? new Date(l.delivered_at).getTime() : null;
-    const badRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [l.id]);
+    const badRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved','disputed')", [l.id]);
     if (!delivered || badRefund || now - delivered < 12 * 3600 * 1000) continue;
     const safeDate = new Date(delivered + 30 * DAY).toISOString();
     if (now - delivered < 30 * DAY) last30Fees += fee;
@@ -1076,12 +1252,23 @@ app.get('/api/dashboard', async (req, res) => {
   };
   const tax = fees * (settings.tax_percent / 100);
   const unpaid = await query("SELECT * FROM listings WHERE status='ended' AND payment_status IN ('awaiting_payment','declined')");
-  const refunds = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return')");
-  for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; rf.returnAutoReleaseAt = returnAutoReleaseAt(rf); } }
+  const refunds = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return','disputed')");
+  for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; rf.returnAutoReleaseAt = returnAutoReleaseAt(rf); rf.receipt = await receiptFor(rl); } }
   const escrowHeld = await query("SELECT * FROM listings WHERE escrow_status LIKE 'held%'");
   const held = [];
   for (const l of escrowHeld) { const payout = await payoutFor(l); held.push({ id: l.id, title: l.title, seller: l.seller, amount: l.escrow_amount, saleAmount: saleAmount(l), payout }); }
-  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw });
+  // Incorrect return claims, for the owner dashboard: every seller with a
+  // claim not upheld after review, with their strike count and when their
+  // selling privileges are suspended until (or removed for good).
+  const claimRows = await query('SELECT * FROM incorrect_claims ORDER BY created_at ASC');
+  const strikeMap = {};
+  for (const c of claimRows) { (strikeMap[c.seller] = strikeMap[c.seller] || []).push(c); }
+  const incorrectClaimStrikes = [];
+  for (const seller of Object.keys(strikeMap)) {
+    const st = await sellerStatus(seller);
+    incorrectClaimStrikes.push({ seller, strikes: st.strikes, suspendedUntil: st.suspendedUntil, suspensionDays: st.suspensionDays, banned: st.banned, canSell: st.canSell });
+  }
+  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes });
 });
 app.post('/api/settings/tax', async (req, res) => {
   const p = Number(req.body.percent);
