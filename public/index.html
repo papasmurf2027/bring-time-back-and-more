@@ -1,0 +1,65 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Bring Time Back and More — Buy it. Sell it. That's it.</title><link rel="stylesheet" href="/styles.css"></head><body>
+<header><img src="/logo.jpg" alt="Bring Time Back and More — ornate gold pocket watch melting into an hourglass"><div><h1>Bring Time Back and More</h1><p class="tag">Buy it. Sell it. That's it.</p></div></header>
+<div class="banner">⚠️ PRE-LAUNCH / TEST MODE — No real money moves here yet. No real payments, no buyer is charged, no seller is paid. Bids and sales are practice only. <b>Do not ship a real item in test.</b></div>
+<main>
+<section class="card"><h2>List in 3 steps. Bid in 1 tap.</h2>
+<p>Sellers: 1) List it &nbsp; 2) Buyers bid &nbsp; 3) Get paid after delivery + 12 hours.<br>Buyers: 1) Find it &nbsp; 2) Bid or Buy Now &nbsp; 3) Pay, get it, done.</p>
+<button class="btn" onclick="show('sell')">Sell Something</button>
+<button class="btn" onclick="show('buy')">Buy Something</button>
+<button class="btn ghost" onclick="show('store')">Store — Buy Now</button>
+<button class="btn ghost" onclick="show('dash')">Owner Dashboard</button>
+<div id="founding" class="small"></div></section>
+
+<section class="card"><h2>🔴 LIVE NOW</h2><p class="small">Sellers live now — join live in chat. Live means live in chat — no video yet. The camera picture streams on the seller's screen only, until a streaming service is connected at go-live.</p><div id="liveNow"></div></section>
+
+<section class="card"><h2>Browse by Type</h2><div class="tiles" id="tiles"></div><div id="list" class="grid"></div></section>
+
+<section class="card" id="sellSec" style="display:none"><h2>Sell Something</h2>
+<label>Your seller name <input id="sSeller" placeholder="e.g. Kevin"></label>
+<label>Title <input id="sTitle" placeholder="What are you selling?"></label>
+<label>Description <input id="sDesc" placeholder="Say what it is — replica / unbranded must say so here"></label>
+<label>Category <select id="sCat"></select></label>
+<label>Listing type <select id="sType"><option value="auction">Auction</option><option value="buy_now">List in Store (Buy Now Only)</option></select></label>
+<label>Starting bid $ <input id="sStart" type="number" value="10"></label>
+<label>Store fixed price $ <input id="sFixed" type="number" value="50"></label>
+<label>Shipping $ (buyers pay shipping) <input id="sShip" type="number" value="10"></label>
+<label>Carrier <input id="sCarrier" placeholder="USPS / UPS / FedEx"></label>
+<label>Authenticity <select id="sAuth"><option>Authentic</option><option>Replica</option><option>Unbranded</option></select></label>
+<label>Timer <select id="sTimer"><option value="10">10 seconds</option><option value="30" selected>30 seconds</option><option value="120">2 minutes</option><option value="600">10 minutes (custom)</option></select></label>
+<label>Mode <select id="sMode"><option>Regular</option><option>Sudden Death</option></select></label>
+<p class="small">Regular: an outbid adds 10 seconds. Sudden Death: an outbid does NOT reset the timer.</p>
+<label><input type="checkbox" id="sInsured" style="width:auto"> Insured shipping (required)</label><br>
+<label><input type="checkbox" id="sAgree" style="width:auto"> I accept the Seller Agreement (required)</label><br>
+<button class="btn" onclick="createListing()">List it</button><p id="sellMsg"></p></section>
+
+<section class="card"><h2>Join the waitlist</h2><p class="small">Founding sellers: first 10 get 0% until it goes live, then 5% forever. Everyone else pays 10%.</p>
+<label>Name <input id="wName"></label><label>Email <input id="wEmail"></label>
+<label><input type="checkbox" id="wFound" style="width:auto"> I want one of the 10 founding spots</label><br>
+<button class="btn" onclick="joinWaitlist()">Join waitlist</button> <button class="btn ghost" onclick="claimFounding()">Claim a founding spot</button><p id="waitMsg"></p></section>
+
+<section class="card" id="dashSec" style="display:none"><h2>Owner Dashboard — Your money, tax put aside automatically</h2><div id="dash"></div>
+<label>Tax set-aside % <input id="taxPct" type="number" value="25"></label> <button class="btn" onclick="setTax()">Set tax %</button></section>
+
+<section class="card"><h2>Seven extras</h2><p class="small">Keep Track (follow a seller) • Free Drops (free giveaway) • My Top Limit (max bid) • Seller Scorecard • Coming Up (scheduled shows) • One Box Deal (combined shipping) • Label Pass (test label, no real carrier yet). Use the buttons on each item page / in the tools below.</p>
+<label>Follow a seller — your name <input id="fBuyer" placeholder="Your name"></label><label>Seller to follow <input id="fSeller" placeholder="Seller name"></label><button class="btn" onclick="follow()">Keep Track</button><p id="followMsg"></p>
+<label>Start a Free Drop — seller <input id="dSeller"></label><label>Drop title <input id="dTitle" placeholder="Free watch giveaway"></label><button class="btn" onclick="makeDrop()">Start Free Drop</button><div id="drops"></div>
+<label>Coming Up — seller <input id="cSeller"></label><label>Show title <input id="cTitle"></label><label>Starts at <input id="cWhen" type="datetime-local"></label><button class="btn" onclick="makeShow()">Schedule show</button><div id="shows"></div>
+</section>
+
+<section class="card"><h2>Rules — short version</h2><ol>
+<li>Owner is not responsible for refunds. Refunds only within 12 hours of receipt, for a legit reason only (not as described, damaged, wrong item, defective, never arrived). "Changed my mind" is not accepted.</li>
+<li>Shipping must be insured. Buyers pay shipping.</li>
+<li>Winner's payment is checked first (test check only — no real processor yet) and held in escrow. Seller is paid only after delivery + 12 hours.</li>
+<li>To ask for a refund you must send BOTH a photo AND a video of the item. Winners get a receipt + video receipt as proof.</li>
+<li>Replicas / unbranded items must say so. A replica cannot be claimed as real. Banned items are blocked. Report a listing if something is wrong.</li>
+<li>Auctions: bid slider, custom bid, 10s / 30s / 2 min / custom timer. Sudden Death = outbid does not reset the timer. Regular = outbid adds 10 seconds.</li>
+<li>Store is Buy Now only — no bidding, no timer. No automatic Buy It Now in auctions; the seller may post a Buy It Now offer in chat.</li>
+<li>Founding sellers: first 10, 0% until it goes live, then 5% forever. Normal fee is 10% on the item price only, not shipping.</li>
+<li>Live Now means live in chat — no video yet.</li>
+<li>© 2026 Bring Time Back and More. All rights reserved. Name, logo, design, text and layout may not be copied, reused or reproduced without permission.</li>
+</ol><p class="small">Full rules, banned-items list and Seller Agreement are enforced by the server on every listing.</p></section>
+</main>
+<footer>© 2026 Bring Time Back and More. All rights reserved.<br>Do not copy this name, logo, design, text or layout without permission.<br><span class="small">Test mode — no real money, no real payment processor connected yet.</span></footer>
+<div id="detail"></div>
+<script src="/app.js"></script></body></html>
