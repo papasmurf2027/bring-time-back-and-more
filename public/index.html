@@ -4,7 +4,7 @@
 <div class="banner">⚠️ PRE-LAUNCH / TEST MODE — No real money moves here yet. No real payments, no buyer is charged, no seller is paid. Bids and sales are practice only. <b>Do not ship a real item in test.</b></div>
 <main>
 <section class="card"><h2>List in 3 steps. Bid in 1 tap.</h2>
-<p>Sellers: 1) List it &nbsp; 2) Buyers bid &nbsp; 3) Get paid after delivery + 12 hours.<br>Buyers: 1) Find it &nbsp; 2) Bid or Buy Now &nbsp; 3) Pay, get it, done.</p>
+<p>Sellers: 1) List it &nbsp; 2) Buyers bid &nbsp; 3) Get paid after delivery — 12 hours once you're a trusted seller.<br>Buyers: 1) Find it &nbsp; 2) Bid or Buy Now &nbsp; 3) Pay, get it, done.</p>
 <button class="btn" onclick="show('sell')">Sell Something</button>
 <button class="btn" onclick="show('buy')">Buy Something</button>
 <button class="btn ghost" onclick="show('store')">Store — Buy Now</button>
@@ -47,6 +47,8 @@
 <button class="btn" onclick="joinWaitlist()">Join waitlist</button> <button class="btn ghost" onclick="claimFounding()">Claim a founding spot</button><p id="waitMsg"></p></section>
 
 <section class="card" id="dashSec" style="display:none"><h2>Owner Dashboard — Your money, tax put aside automatically</h2><div id="dash"></div>
+<h3>Check a seller's payout tier</h3><p class="small">New (0–2 clean sales) • Trusted (3–9) • Top (10+ clean sales and a score of 4.0 or more, if they have scores). New: under $100 in 3 days, $100+ in 7 days. Trusted: under $100 in 12 hours, $100–$500 in 3 days, over $500 in 7 days. Top: everything in 12 hours. Payout dates are tracked dates in test mode — no real bank transfer yet.</p>
+<label>Seller name <input id="tierSeller" placeholder="e.g. Kevin"></label><button class="btn ghost" onclick="checkTier()">Check payout tier</button><p id="tierMsg"></p>
 <h3>Sold items — QR codes to ship</h3><p class="small">Scan a code to open that exact sale, then tap Mark as shipped — so you don't box up the wrong order.</p><div id="soldQRs"></div>
 <label>Tax set-aside % <input id="taxPct" type="number" value="25"></label> <button class="btn" onclick="setTax()">Set tax %</button>
 <h3>Tell the waitlist we're live</h3>
@@ -66,7 +68,8 @@
 <section class="card"><h2>Rules — short version</h2><ol>
 <li>Owner is not responsible for refunds. Refunds only within 12 hours of receipt, for a legit reason only (not as described, damaged, wrong item, defective, never arrived). "Changed my mind" is not accepted.</li>
 <li>Shipping must be insured. Buyers pay shipping — the price is set by package size: Small $4.47, Medium $4.85, Large $5.25, XL $6.75, Box 1–5 lb $7.75, Big box over 5 lb $9.69+, Flat Rate box $12.99, Card envelope $0.99. Carrier is automatic: everything ships via USPS, except Big box over 5 lb, which ships via UPS. No FedEx.</li>
-<li>Winner's payment is checked first (test check only — no real processor yet) and held in escrow. Seller is paid only after delivery + 12 hours.</li>
+<li>Winner's payment is checked first (test check only — no real processor yet) and held in escrow. Seller is paid after delivery, on their payout tier — see the payout rule below.</li>
+<li><b>How fast sellers get paid.</b> Sellers earn their payout speed with clean sales (a sale that completed, was delivered and paid out, with no refund or dispute). <b>New seller</b> (0–2 clean sales): under $100 is paid 3 days after delivery, $100 and up is paid 7 days after delivery. <b>Trusted seller</b> (3–9 clean sales): under $100 is paid 12 hours after delivery, $100–$500 is paid 3 days after delivery, over $500 is paid 7 days after delivery. <b>Top seller</b> (10+ clean sales and a Seller Scorecard average of 4.0 or more, if they have any scores): everything is paid 12 hours after delivery. The 12-hour refund window for buyers stays the same — a payout never comes out before that window closes, and never while a refund is pending. Payout dates are tracked dates in test mode — no real payment processor is connected yet, so no real bank transfer moves.</li>
 <li>To ask for a refund you must send BOTH a photo AND a video of the item. Winners get a receipt + video receipt as proof.</li>
 <li>Replicas / unbranded items must say so. A replica cannot be claimed as real. Banned items are blocked. Report a listing if something is wrong.</li>
 <li>Auctions: bid slider, custom bid, 10s / 30s / 2 min / custom timer. Sudden Death = outbid does not reset the timer. Regular = outbid adds 10 seconds.</li>
