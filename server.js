@@ -69,6 +69,44 @@ async function qrForListing(l) {
 const BANNED = ['stolen','counterfeit','fake id','illegal drugs','weapon','firearm','explosives','human trafficking','stolen goods'];
 const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Home','Fashion','Art','Sports','Toys','Other'];
 function bannedHit(s) { const t = (s || '').toLowerCase(); return BANNED.find(b => t.includes(b)); }
+// ---------- No advertising other auction sites / marketplaces on this site ----------
+// Rule (Kevin, 2026-11-18): nobody may advertise another auction site or
+// marketplace on Bring Time Back and More — in chat, listings, reviews, Free
+// Drops or show titles. Enforced server-side, not just in the browser, so it
+// cannot be skipped by calling the API directly. Existing posts are NOT
+// retroactively deleted; the block applies to new posts/listings only.
+// Allowed: this site's own links (bringtimebackandmore.com and its Railway
+// domain) and plain text with no links. A buyer simply mentioning a site in a
+// question ("did you buy this on ebay?") is allowed — it is only blocked when
+// it is a link, or a competitor name used to advertise a show/page.
+// What code CANNOT do: stop another site using Kevin's name elsewhere on the
+// internet. That needs a USPTO trademark filing (not done yet — ™ only, no ®)
+// plus takedown letters. This code only stops the advertising on THIS site.
+const AD_ERROR = 'No advertising other auction sites or marketplaces here — links to other sites are not allowed.';
+const OWN_DOMAINS = ['bringtimebackandmore.com', 'bring-time-back-and-more-production.up.railway.app'];
+const COMPETITOR_DOMAINS = ['whatnot.com', 'ebay.com', 'mercari.com', 'poshmark.com', 'offerup.com', 'craigslist.org', 'facebook.com', 'etsy.com', 'amazon.com', 'tiktok.com', 'shop.app', 'ebay.co.uk', 'whatnot.co.uk'];
+const COMPETITOR_NAMES = ['whatnot', 'ebay', 'mercari', 'poshmark', 'offerup', 'craigslist', 'etsy', 'amazon', 'tiktok'];
+const AD_PHRASES = ['check out', 'checkout', 'follow me', 'follow my', 'my show', 'my live', 'my page', 'my shop', 'my store', 'join me', 'come to', 'visit my', 'find me', 'see me on', 'watch me', 'my link', 'click the link'];
+function adHit(text) {
+  const t = String(text || '').toLowerCase();
+  if (!t.trim()) return false;
+  // 1) A named competitor domain — even without http:// — is advertising.
+  //    "whatnot dot com" / "ebay dot com" spellings count too.
+  for (const d of COMPETITOR_DOMAINS) if (t.includes(d)) return true;
+  for (const n of COMPETITOR_NAMES) if (new RegExp(n + '[\\s.]*dot[\\s.]*com').test(t)) return true;
+  // 2) Any other link, except this site's own links. Strip the own domains
+  //    first so bringtimebackandmore.com / the Railway domain stay allowed.
+  let stripped = t;
+  for (const d of OWN_DOMAINS) stripped = stripped.split(d).join('');
+  if (/https?:\/\//.test(stripped) || /www\./.test(stripped)) return true;
+  if (/\b[a-z0-9][a-z0-9-]*\.(com|net|shop|org|io|co|app|store|site)\b/.test(stripped)) return true;
+  // 3) Competitor name + an advertising phrase, even with no link:
+  //    "check out my whatnot show", "follow me on ebay", "my ebay page".
+  for (const n of COMPETITOR_NAMES) {
+    if (t.includes(n) && AD_PHRASES.some(p => t.includes(p))) return true;
+  }
+  return false;
+}
 function feePercent(seller, founding) { return founding ? 5 : 10; } // founding forever rate 5%, normal 10%
 
 // ---- simulated payment check (TEST ONLY) ----
@@ -226,6 +264,8 @@ app.post('/api/listings', async (req, res) => {
   if (!b.seller) return res.json({ ok: false, error: 'seller name is required' });
   if (!isRandom && !b.title) return res.json({ ok: false, error: 'seller and title are required' });
   if (!b.agreement) return res.json({ ok: false, error: 'Seller Agreement must be accepted' });
+  // No advertising another auction site / marketplace in a listing.
+  if (adHit((b.title || '') + ' ' + (b.description || '') + ' ' + (b.randomBase || ''))) return res.json({ ok: false, error: AD_ERROR });
   // Shipping is set by package size; a plain $ amount is still accepted for
   // backwards compatibility (older clients / API callers without a size).
   const sizePrice = shipPrice(b.packageSize);
@@ -260,6 +300,7 @@ app.post('/api/listings', async (req, res) => {
   const type = b.type === 'buy_now' ? 'buy_now' : (b.type === 'wheel' ? 'wheel' : 'auction');
   // A Time Wheel needs the items loaded on it: 1 to 100, each a short name.
   const wheelItems = type === 'wheel' ? parseWheelItems(b) : [];
+  if (wheelItems.some(w => adHit(w.name))) return res.json({ ok: false, error: AD_ERROR });
   if (type === 'wheel' && !wheelItems.length) return res.json({ ok: false, error: 'a Time Wheel needs at least 1 item on it (up to 100) — one per line' });
   if (wheelItems.length > 100) return res.json({ ok: false, error: 'a Time Wheel holds at most 100 items' });
   const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false);
@@ -276,6 +317,7 @@ app.post('/api/listings/:id/reveal', async (req, res) => {
   if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the winner has to win and pay first — then say what they won' });
   const revealed = String(req.body.revealedItem || req.body.revealed || '').trim().slice(0, 120);
   if (!revealed) return res.json({ ok: false, error: 'type what they won — e.g. Invicta Lupah watch' });
+  if (adHit(revealed)) return res.json({ ok: false, error: AD_ERROR });
   await query('UPDATE listings SET revealed_item=$1, revealed_at=$2 WHERE id=$3', [revealed, nowISO(), l.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `🎲 Revealed live on camera: ${revealed} — that is what ${l.winner} won.`, nowISO()]);
@@ -430,6 +472,7 @@ app.get('/api/listings/:id/chat', async (req, res) => res.json(await query('SELE
 app.post('/api/listings/:id/chat', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
+  if (adHit(req.body.message || '')) return res.json({ ok: false, error: AD_ERROR });
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,$5,$6)',
     [uid(), l.id, req.body.name || 'Buyer', req.body.message || '', req.body.name === l.seller ? 1 : 0, nowISO()]);
   res.json({ ok: true });
@@ -495,6 +538,7 @@ app.get('/api/following/:buyer', async (req, res) => {
   res.json(out);
 });
 app.post('/api/drops', async (req, res) => {
+  if (adHit(req.body.title || '')) return res.json({ ok: false, error: AD_ERROR });
   const id = uid();
   await query('INSERT INTO drops(id,seller,title,ends_at,status,created_at) VALUES($1,$2,$3,$4,$5,$6)', [id, req.body.seller, req.body.title, req.body.endsAt || new Date(Date.now() + 60000).toISOString(), 'open', nowISO()]);
   res.json({ ok: true, id });
@@ -515,6 +559,7 @@ app.post('/api/top-limit', async (req, res) => {
 app.post('/api/reviews', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.listingId]);
   if (!l || l.winner !== req.body.reviewer) return res.json({ ok: false, error: 'only the winner can leave a score' });
+  if (adHit(req.body.comment || '')) return res.json({ ok: false, error: AD_ERROR });
   await query('INSERT INTO reviews(id,listing_id,seller,reviewer,stars,comment,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [uid(), l.id, l.seller, req.body.reviewer, Number(req.body.stars), req.body.comment || '', nowISO()]);
   res.json({ ok: true });
@@ -525,6 +570,7 @@ app.get('/api/scorecard/:seller', async (req, res) => {
   res.json({ seller: req.params.seller, average: r && r.avg ? Number(r.avg).toFixed(1) : null, count: Number((r && r.n) || 0), reviews: rows });
 });
 app.post('/api/shows', async (req, res) => {
+  if (adHit(req.body.title || '')) return res.json({ ok: false, error: AD_ERROR });
   const id = uid();
   await query('INSERT INTO shows(id,seller,title,starts_at,created_at) VALUES($1,$2,$3,$4,$5)', [id, req.body.seller, req.body.title, req.body.startsAt, nowISO()]);
   res.json({ ok: true, id });
