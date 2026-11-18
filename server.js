@@ -133,6 +133,15 @@ async function init() {
   try { await query('ALTER TABLE listings ADD COLUMN revealed_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query("ALTER TABLE waitlist ADD COLUMN welcome_email_status TEXT DEFAULT 'pending'"); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE waitlist ADD COLUMN welcome_sent_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query("ALTER TABLE refunds ADD COLUMN return_choice TEXT DEFAULT ''"); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_label_carrier TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_label_tracking TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_label_code TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_cost REAL DEFAULT 0'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_shipped_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_tracking TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_received_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
 // ---------- Time Wheel ----------
@@ -165,9 +174,40 @@ async function spinWheelFor(l) {
     [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — that is the item ${l.winner} gets. No extra prize, no extra charge.`, nowISO()]);
   return { landedItem: landed.name, landedIndex: idx, totalItems: items.length };
 }
+// ---------- Seller-choice return rule (Kevin, 2026-11-18) ----------
+// When a buyer asks for a refund, it is UP TO THE SELLER what happens next:
+// (1) refund without the item back, or (2) seller wants the item back - then
+// NO refund until the seller receives it back. If the seller wants it back,
+// a tracked return label is sent to the buyer (Label Pass-style record, same
+// automatic carrier rule: USPS, except Big box over 5 lb = UPS - test record
+// only, no real carrier connected yet). The return label cost is paid by the
+// SELLER, but ONLY when the seller asked for the item back - from the seller's
+// money, not the buyer's and not the owner's fees. If the buyer never ships
+// the return back before the refund window (payout date) closes, the refund
+// EXPIRES and no refund is given - the seller keeps the sale.
+async function expireRefundIfPast(l, rf) {
+  if (!rf || !['pending', 'awaiting_return'].includes(rf.status)) return rf;
+  const payout = await payoutFor(l);
+  if (payout.payoutAt && new Date() >= new Date(payout.payoutAt)) {
+    await query("UPDATE refunds SET status='expired' WHERE id=$1", [rf.id]);
+    if (l.escrow_status === 'held_refund_pending') await query("UPDATE listings SET escrow_status='held_refund_window' WHERE id=$1", [l.id]);
+    await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+      [uid(), l.id, l.seller, 'Refund request expired — the refund window closed on the payout date and the item was not sent back, so no refund is given.', nowISO()]);
+    return { ...rf, status: 'expired' };
+  }
+  return rf;
+}
+async function expireRefunds() {
+  const open = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return')");
+  for (const rf of open) {
+    const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+    if (l) await expireRefundIfPast(l, rf);
+  }
+}
 // Auto-end timers + draw free drops, every second.
 async function sweep() {
   try {
+    await expireRefunds();
     const live = await query("SELECT * FROM listings WHERE status='live' AND type IN ('auction','wheel')");
     for (const l of live) {
       if (l.ends_at && new Date(l.ends_at) <= new Date()) {
@@ -218,7 +258,8 @@ app.get('/api/listings/:id', async (req, res) => {
   const qr = await qrForListing(l);
   const wheelItems = l.type === 'wheel' ? await wheelItemsFor(l.id) : [];
   const payout = await payoutFor(l);
-  res.json({ ...l, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
+  const refund = await queryOne('SELECT * FROM refunds WHERE listing_id=$1 ORDER BY created_at DESC LIMIT 1', [l.id]);
+  res.json({ ...l, refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -510,9 +551,12 @@ app.post('/api/listings/:id/release-escrow', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
+  if (l.escrow_status === 'refunded') return res.json({ ok: false, error: 'a refund was already given on this sale' });
   const payout = await payoutFor(l);
+  const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [l.id]);
+  if (openRefund) await expireRefundIfPast(l, openRefund);
   if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout });
-  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [l.id]);
+  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [l.id]);
   if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
   await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
   res.json({ ok: true });
@@ -686,10 +730,96 @@ app.post('/api/refunds', async (req, res) => {
   const payout = await payoutFor(l);
   if (l.escrow_status === 'released' || (payout.payoutAt && new Date() >= new Date(payout.payoutAt))) return res.json({ ok: false, error: 'the refund window has closed — refunds close on the payout date (' + payout.payoutLabel + ' after delivery, ' + (payout.payoutAt || 'not set yet') + '), and no refund is possible after the seller is paid out', payout });
   if (!['not as described', 'damaged in transit', 'wrong item', 'defective', 'never arrived'].includes((b.reason || '').toLowerCase())) return res.json({ ok: false, error: 'a legit reason is required — "changed my mind" is not accepted' });
+  const open = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [b.listingId]);
+  if (open) return res.json({ ok: false, error: 'a refund request is already open for this sale — the seller is deciding' });
   await query('INSERT INTO refunds(id,listing_id,requester,reason,photo_name,video_name,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
     [uid(), b.listingId, b.requester || 'Buyer', b.reason, b.photoName, b.videoName, 'pending', nowISO()]);
   await query("UPDATE listings SET escrow_status='held_refund_pending' WHERE id=$1", [b.listingId]);
   res.json({ ok: true });
+});
+app.get('/api/refunds/:id', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (l) await expireRefundIfPast(l, rf);
+  res.json(await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]));
+});
+// Seller decides what happens with a refund request. Seller-only, only while
+// the request is still pending (before the seller has decided).
+// choice 'no_return': refund without the item back - released at once from
+//   the seller's escrow money. No return label, no return cost.
+// choice 'want_back': seller wants the item back - a tracked return label is
+//   sent to the buyer and NO refund until the seller receives the item back.
+//   The return label cost is the seller's cost (same package size as the
+//   sale, same automatic carrier rule), taken from the seller's money - not
+//   the buyer's, not the owner's fees.
+app.post('/api/refunds/:id/choose', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can decide on this refund' });
+  if (rf.status !== 'pending') return res.json({ ok: false, error: 'this refund has already been decided' });
+  await expireRefundIfPast(l, rf);
+  const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
+  if (fresh.status === 'expired') return res.json({ ok: false, error: 'the refund window has closed — this refund request has expired' });
+  const choice = String(req.body.choice || '');
+  if (choice === 'no_return') {
+    await query("UPDATE refunds SET return_choice='no_return', decided_at=$1, status='approved' WHERE id=$2", [nowISO(), rf.id]);
+    await query("UPDATE listings SET escrow_status='refunded' WHERE id=$1", [l.id]);
+    await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+      [uid(), l.id, l.seller, 'Seller agreed to the refund without the item back — the refund is released from the seller\'s escrow money. The buyer keeps the item.', nowISO()]);
+    return res.json({ ok: true, choice: 'no_return', status: 'approved' });
+  }
+  if (choice === 'want_back') {
+    const carrier = carrierFor(l.package_size);
+    const tracking = makeTracking(carrier);
+    const code = 'RBL-' + uid().slice(0, 8).toUpperCase();
+    const cost = Math.round((shipPrice(l.package_size) !== null ? shipPrice(l.package_size) : (l.shipping || 0)) * 100) / 100;
+    await query("UPDATE refunds SET return_choice='want_back', decided_at=$1, status='awaiting_return', return_label_carrier=$2, return_label_tracking=$3, return_label_code=$4, return_cost=$5 WHERE id=$6",
+      [nowISO(), carrier, tracking, code, cost, rf.id]);
+    await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+      [uid(), l.id, carrier, tracking, code, nowISO()]);
+    await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+      [uid(), l.id, l.seller, 'Seller wants the item back first — a tracked return label (' + carrier + ' ' + tracking + ') was sent to the buyer. No refund until the seller receives the item back. The return label cost ($' + cost.toFixed(2) + ') is the seller\'s cost, not the buyer\'s and not the owner\'s fees. Test label only — no real carrier connected yet.', nowISO()]);
+    return res.json({ ok: true, choice: 'want_back', status: 'awaiting_return', carrier, tracking, code, returnCost: cost });
+  }
+  return res.json({ ok: false, error: 'choice must be no_return or want_back' });
+});
+// Buyer ships the item back using the return label. Only while the seller is
+// waiting for the item back. The buyer enters the return tracking (the label
+// tracking is the default) or just taps that they shipped it.
+app.post('/api/refunds/:id/return-shipped', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'the seller has not asked for the item back' });
+  await expireRefundIfPast(l, rf);
+  const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
+  if (fresh.status === 'expired') return res.json({ ok: false, error: 'the refund window has closed — this refund request has expired' });
+  const tracking = String(req.body.tracking || rf.return_label_tracking || '').trim().slice(0, 100);
+  await query('UPDATE refunds SET return_tracking=$1, return_shipped_at=$2 WHERE id=$3', [tracking, nowISO(), rf.id]);
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,0,$5)',
+    [uid(), l.id, rf.requester || 'Buyer', 'Return shipped back — tracking ' + (tracking || 'on the return label') + '. The seller will confirm when they receive it.', nowISO()]);
+  res.json({ ok: true, tracking });
+});
+// Seller confirms they received the returned item back. Seller-only, only
+// after the buyer shipped it back. ONLY then is the refund released from the
+// seller's escrow money.
+app.post('/api/refunds/:id/confirm-receipt', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can confirm they got the item back' });
+  if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
+  if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the buyer has not shipped the item back yet' });
+  await query("UPDATE refunds SET return_received_at=$1, status='approved' WHERE id=$2", [nowISO(), rf.id]);
+  await query("UPDATE listings SET escrow_status='refunded' WHERE id=$1", [l.id]);
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+    [uid(), l.id, l.seller, 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.', nowISO()]);
+  res.json({ ok: true, status: 'approved' });
 });
 // ---------- Founding / waitlist / dashboard / tax / report ----------
 app.post('/api/founding/claim', async (req, res) => {
@@ -868,7 +998,7 @@ app.get('/api/dashboard', async (req, res) => {
   };
   const tax = fees * (settings.tax_percent / 100);
   const unpaid = await query("SELECT * FROM listings WHERE status='ended' AND payment_status IN ('awaiting_payment','declined')");
-  const refunds = await query("SELECT * FROM refunds WHERE status='pending'");
+  const refunds = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return')");
   for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; } }
   const escrowHeld = await query("SELECT * FROM listings WHERE escrow_status LIKE 'held%'");
   const held = [];
