@@ -23,7 +23,74 @@ async function createListing(){
   const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,shipping:document.getElementById('sShip').value,carrier:document.getElementById('sCarrier').value,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||''};
   const r=await j('/api/listings',b); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
+// ---------- Live video (WebRTC peer-to-peer, no paid service) ----------
+// Seller broadcasts their camera to each viewer in the room via RTCPeerConnection;
+// the server only relays small signalling messages (join / offer / answer / ICE).
+// STUN only (stun.l.google.com) — no TURN server, so a few strict networks may fail.
+let liveListingId=null, liveRole=null, liveViewerId=null, liveStream=null, liveRemoteStream=null;
+let livePCs={}, livePoll=null, liveSince=null, liveSeen=new Set();
+function liveVideoEl(){return document.getElementById('liveVideo');}
+function liveStatusEl(){return document.getElementById('liveStatus');}
+function setLiveStatus(t){const e=liveStatusEl();if(e)e.textContent=t;}
+async function sendSignal(id,sender,recipient,kind,payload){try{await j('/api/listings/'+id+'/signal',{sender,recipient,kind,payload:typeof payload==='string'?payload:JSON.stringify(payload)});}catch(e){}}
+function makePC(){return new RTCPeerConnection({iceServers:[{urls:'stun:stun.l.google.com:19302'}]});}
+function wirePC(pc,id,peerId){
+  pc.onicecandidate=e=>{if(e.candidate)sendSignal(id,liveRole==='seller'?'seller':liveViewerId,peerId,'ice',e.candidate);};
+}
+function stopLivePoll(){if(livePoll){clearInterval(livePoll);livePoll=null;}}
+function stopLiveFull(){
+  stopLivePoll();
+  for(const k of Object.keys(livePCs)){try{livePCs[k].close();}catch(e){}}
+  livePCs={};
+  if(liveStream){liveStream.getTracks().forEach(t=>t.stop());liveStream=null;}
+  liveRemoteStream=null; liveListingId=null; liveRole=null; liveViewerId=null; liveSince=null; liveSeen=new Set();
+}
+async function pollSignals(id){
+  let rows=[]; try{rows=await j('/api/listings/'+id+'/signal?since='+encodeURIComponent(liveSince||new Date(0).toISOString()));}catch(e){return;}
+  if(!Array.isArray(rows))return;
+  for(const s of rows){
+    if(liveSeen.has(s.id))continue; liveSeen.add(s.id);
+    if(liveRole==='seller'){
+      if(s.recipient!=='seller')continue;
+      if(s.kind==='join'&&s.sender){ // a viewer wants to watch — offer them the stream
+        const pc=makePC(); livePCs[s.sender]=pc; wirePC(pc,id,s.sender);
+        if(liveStream)liveStream.getTracks().forEach(t=>pc.addTrack(t,liveStream));
+        try{const offer=await pc.createOffer(); await pc.setLocalDescription(offer); sendSignal(id,'seller',s.sender,'offer',offer);}catch(e){}
+      } else if(s.kind==='answer'&&livePCs[s.sender]){
+        try{await livePCs[s.sender].setRemoteDescription(new RTCSessionDescription(JSON.parse(s.payload)));}catch(e){}
+      } else if(s.kind==='ice'&&livePCs[s.sender]){
+        try{await livePCs[s.sender].addIceCandidate(new RTCIceCandidate(JSON.parse(s.payload)));}catch(e){}
+      } else if(s.kind==='leave'&&livePCs[s.sender]){try{livePCs[s.sender].close();}catch(e){} delete livePCs[s.sender];}
+    } else if(liveRole==='viewer'){
+      if(s.recipient!==liveViewerId)continue;
+      if(s.kind==='offer'){
+        try{
+          const pc=makePC(); livePCs.seller=pc; wirePC(pc,id,'seller');
+          pc.ontrack=e=>{liveRemoteStream=e.streams[0]; const v=liveVideoEl(); if(v){v.srcObject=liveRemoteStream; v.muted=false; v.style.display='block'; v.play().catch(()=>{const b=document.getElementById('unmuteBtn'); if(b)b.style.display='inline-block';});} setLiveStatus('🔴 LIVE — watching the seller now. You can hear them talking. Type in chat what you want to see.');};
+          await pc.setRemoteDescription(new RTCSessionDescription(JSON.parse(s.payload)));
+          const answer=await pc.createAnswer(); await pc.setLocalDescription(answer);
+          sendSignal(id,liveViewerId,'seller','answer',answer);
+        }catch(e){}
+      } else if(s.kind==='ice'&&livePCs.seller){
+        try{await livePCs.seller.addIceCandidate(new RTCIceCandidate(JSON.parse(s.payload)));}catch(e){}
+      }
+    }
+  }
+}
+async function startViewer(id){
+  liveRole='viewer'; liveViewerId='v-'+Math.random().toString(36).slice(2,10); liveSince=new Date().toISOString();
+  setLiveStatus('Connecting to the seller\'s live video…');
+  await sendSignal(id,liveViewerId,'seller','join',{});
+  stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
+}
+async function startSellerPoll(id){
+  liveSince=new Date().toISOString();
+  stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
+}
 async function openItem(id){
+  const wasLive=liveListingId===id&&(liveRole==='seller'||liveRole==='viewer');
+  if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
+  liveListingId=id;
   const l=await j('/api/listings/'+id);
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2><p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
@@ -41,7 +108,12 @@ async function openItem(id){
   ${l.payment_status==='declined'?`<div style="background:#c62828;padding:14px;border-radius:10px"><h3>PAYMENT DIDN'T GO THROUGH! Don't lose this sale — pick one</h3><button class="btn" onclick="fixPay('${l.id}')">Fix Payment</button><button class="btn" onclick="rerun('${l.id}','${l.seller}')">Rerun Auction</button></div>`:''}
   <label>Winner payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Venmo</option></select></label><label>Detail <input id="pDetail" value="4242424242424242"></label><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
   ${l.receipt?`<p>Receipt ${l.receipt.receipt_no} — total $${l.receipt.total} — <a href="#" onclick="alert('Receipt ${l.receipt.receipt_no}: ${l.title}, $${l.receipt.total} paid, seller ${l.seller}, winner ${l.winner}');return false">Download receipt</a></p>`:''}
-  <h3>Chat room ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3><p class="small">Live in chat — no video yet. Buyers see live status + chat only.</p>
+  <h3>Live video ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3>
+  <video id="liveVideo" playsinline autoplay style="width:100%;max-height:420px;background:#000;border-radius:10px;display:none"></video>
+  <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
+  <p id="liveStatus" class="small">${l.seller_live?'Seller is live — connecting to live video…':'Seller is not live yet. When they go live, their camera shows here.'}</p>
+  <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
+  <h3>Chat room ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3><p class="small">Live video + live chat — type in chat what you want the seller to show you.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${c.name}${c.is_seller?' (seller)':''}:</b> ${c.message}</p>`).join('')}</div>
   <label>Your name <input id="cName"></label><label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
@@ -49,6 +121,18 @@ async function openItem(id){
   <p><button class="btn ghost" onclick="report('${l.id}')">Report this listing</button> <button class="btn ghost" onclick="score('${l.seller}')">Seller Scorecard</button></p>
   <div id="itemMsg"></div></div>`;
   if(l.ends_at){const t=setInterval(()=>{const ms=new Date(l.ends_at)-new Date();const e=document.getElementById('cd');if(!e){clearInterval(t);return;}e.textContent=ms>0?('⏱ '+Math.floor(ms/60000)+':'+String(Math.floor(ms/1000)%60).padStart(2,'0')):'Auction ended';},250);}
+  // Live video: re-attach after a re-render, or join as a viewer if the seller is live.
+  if(wasLive&&liveRole==='seller'&&liveStream){
+    const v=liveVideoEl(); if(v){v.srcObject=liveStream; v.style.display='block'; v.play().catch(()=>{});}
+    const b=document.getElementById('endLiveBtn'); if(b)b.style.display='inline-block';
+    setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
+    startSellerPoll(id);
+  } else if(wasLive&&liveRole==='viewer'){
+    const v=liveVideoEl(); if(v&&liveRemoteStream){v.srcObject=liveRemoteStream; v.muted=false; v.style.display='block'; v.play().catch(()=>{const b=document.getElementById('unmuteBtn'); if(b)b.style.display='inline-block';});}
+    stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
+  } else if(l.seller_live&&l.type==='auction'){
+    startViewer(id);
+  }
 }
 async function bid(id,add){const l=await j('/api/listings/'+id);const r=await j('/api/listings/'+id+'/bid',{bidder:document.getElementById('bName').value||'Buyer',amount:l.current_bid+add});alert(r.ok?`Bid placed: $${r.currentBid} (total $${r.total})`:'Error: '+r.error);openItem(id);}
 async function bidCustom(id){const r=await j('/api/listings/'+id+'/bid',{bidder:document.getElementById('bName').value||'Buyer',amount:Number(document.getElementById('bAmt').value)});alert(r.ok?`Bid placed: $${r.currentBid}`:'Error: '+r.error);openItem(id);}
@@ -58,7 +142,29 @@ async function payWinner(id){const r=await j('/api/listings/'+id+'/pay',{method:
 async function fixPay(id){const r=await j('/api/listings/'+id+'/notify-fix',{});alert(r.ok?'Fix-payment notice sent to the winner':'Error: '+r.error);}
 async function rerun(id,seller){const r=await j('/api/listings/'+id+'/rerun',{seller});alert(r.ok?'Auction rerun — live again at the same price/timer':'Error: '+r.error);openItem(id);}
 async function chat(id){await j('/api/listings/'+id+'/chat',{name:document.getElementById('cName').value||'Buyer',message:document.getElementById('cMsg').value});openItem(id);}
-async function goLive(id){const r=await j('/api/listings/'+id+'/go-live',{seller:document.getElementById('cName').value});alert(r.ok?'You are LIVE NOW in chat':'Error: '+r.error);openItem(id);}
+async function goLive(id){
+  const seller=document.getElementById('cName').value;
+  // Camera first: if the seller blocks it, do not mark the room live.
+  let stream;
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true});}
+  catch(e){alert('Camera / mic blocked — allow camera access in your browser settings and try again.');return;}
+  const r=await j('/api/listings/'+id+'/go-live',{seller});
+  if(!r.ok){stream.getTracks().forEach(t=>t.stop());alert('Error: '+r.error);return;}
+  // Stop any viewer connection from this browser, then broadcast.
+  if(liveRole==='viewer'){stopLiveFull(); liveListingId=id;}
+  liveRole='seller'; liveStream=stream; liveSince=new Date().toISOString(); liveSeen=new Set(); livePCs={};
+  const v=liveVideoEl(); if(v){v.srcObject=stream; v.muted=true; v.style.display='block'; v.play().catch(()=>{});}
+  const b=document.getElementById('endLiveBtn'); if(b)b.style.display='inline-block';
+  setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
+  startSellerPoll(id);
+  alert('You are LIVE NOW — buyers can see your camera.');
+}
+async function endLive(id){
+  if(liveRole==='viewer')sendSignal(id,liveViewerId,'seller','leave',{});
+  stopLiveFull();
+  await j('/api/listings/'+id+'/end-live',{});
+  openItem(id);
+}
 async function offer(id){const amt=prompt('Buy It Now offer $ ?');if(!amt)return;const r=await j('/api/listings/'+id+'/buy-now-offer',{seller:document.getElementById('cName').value,amount:Number(amt)});alert(r.ok?'Offer posted in chat':'Error: '+r.error);openItem(id);}
 async function report(id){const r=await j('/api/report',{listingId:id,reason:prompt('What is wrong with this listing?')||''});alert(r.message||'Reported');}
 async function score(s){const r=await j('/api/scorecard/'+encodeURIComponent(s));alert(`Seller Scorecard for ${s}: ${r.average||'no scores yet'} / 5 from ${r.count} score(s)`);}
