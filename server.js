@@ -247,6 +247,25 @@ app.post('/api/listings/:id/go-live', async (req, res) => {
 app.post('/api/listings/:id/end-live', async (req, res) => {
   await query('UPDATE listings SET seller_live=0 WHERE id=$1', [req.params.id]); res.json({ ok: true });
 });
+// ---------- Live video signalling (WebRTC, peer-to-peer, no paid service) ----------
+// Signals carry SDP offers/answers and ICE candidates between the seller and each
+// viewer in one auction room. Payloads are opaque JSON strings; nothing is recorded.
+app.post('/api/listings/:id/signal', async (req, res) => {
+  const b = req.body || {};
+  const kind = String(b.kind || '');
+  if (!['join', 'offer', 'answer', 'ice', 'leave'].includes(kind)) return res.json({ ok: false, error: 'bad signal kind' });
+  if (!b.sender) return res.json({ ok: false, error: 'sender is required' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  await query('INSERT INTO live_signals(id,listing_id,sender,recipient,kind,payload,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [uid(), l.id, String(b.sender).slice(0, 100), String(b.recipient || '').slice(0, 100), kind, String(b.payload || '').slice(0, 20000), nowISO()]);
+  res.json({ ok: true });
+});
+app.get('/api/listings/:id/signal', async (req, res) => {
+  const since = req.query.since ? String(req.query.since) : '1970-01-01T00:00:00.000Z';
+  const rows = await query('SELECT * FROM live_signals WHERE listing_id=$1 AND created_at > $2 ORDER BY created_at ASC', [req.params.id, since]);
+  res.json(rows);
+});
 app.post('/api/listings/:id/buy-now-offer', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || l.type !== 'auction') return res.json({ ok: false, error: 'offers in chat are for auctions only' });
