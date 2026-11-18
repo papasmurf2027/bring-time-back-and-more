@@ -141,6 +141,7 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN return_shipped_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_tracking TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_received_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE refunds ADD COLUMN return_delivered_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
@@ -185,8 +186,64 @@ async function spinWheelFor(l) {
 // money, not the buyer's and not the owner's fees. If the buyer never ships
 // the return back before the refund window (payout date) closes, the refund
 // EXPIRES and no refund is given - the seller keeps the sale.
+// HOLE FIXED (Kevin, 2026-11-18): the buyer must NOT lose out if the seller
+// never taps "I got it back" after the return was actually delivered. When
+// the carrier scans the return as DELIVERED, the system records it as
+// delivered on its own and releases the refund - no seller tap needed. In
+// test mode there is no live carrier feed yet, so delivery is recorded from
+// the tracking / "Mark return as delivered" step (POST /api/refunds/:id/
+// return-delivered, usable by the buyer or the owner); at go-live a real
+// carrier delivery scan will do this automatically. Safety net: once the
+// return is shipped, the refund auto-releases 48 hours after the return was
+// shipped if the seller still has not confirmed receipt - the seller cannot
+// stall it forever by just not tapping. A return that has been shipped is
+// never expired at the payout date - it waits for that 48-hour release.
+const RETURN_AUTO_RELEASE_HOURS = 48;
+function returnAutoReleaseAt(rf) {
+  if (!rf || !rf.return_shipped_at) return null;
+  return new Date(new Date(rf.return_shipped_at).getTime() + RETURN_AUTO_RELEASE_HOURS * 3600 * 1000).toISOString();
+}
+function withReturnDates(rf) {
+  if (!rf) return rf;
+  return { ...rf, returnAutoReleaseAt: returnAutoReleaseAt(rf) };
+}
+// Release an approved refund from the seller's escrow money. `how` says why
+// the item is counted as back: 'seller_confirmed' (seller tapped),
+// 'delivered' (carrier scan / mark-as-delivered), or 'auto' (48 hours passed
+// since the return was shipped with no seller confirm).
+async function releaseRefund(rf, l, how) {
+  const now = nowISO();
+  await query("UPDATE refunds SET return_received_at=$1, return_delivered_at=$2, status='approved' WHERE id=$3",
+    [rf.return_received_at || now, how === 'seller_confirmed' ? (rf.return_delivered_at || null) : (rf.return_delivered_at || now), rf.id]);
+  await query("UPDATE listings SET escrow_status='refunded' WHERE id=$1", [l.id]);
+  const note = how === 'delivered'
+    ? 'The return was scanned as DELIVERED (tracking ' + (rf.return_tracking || rf.return_label_tracking || '') + ') — the refund is released from the seller\'s escrow money. No seller tap was needed.'
+    : how === 'auto'
+      ? 'The return was shipped 48 hours ago and the seller never confirmed receipt, so the refund released on its own from the seller\'s escrow money — the seller cannot stall it by not tapping.'
+      : 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.';
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+    [uid(), l.id, l.seller, note, now]);
+  return { ok: true, status: 'approved' };
+}
+// Auto-release: a shipped return the seller never confirms. Runs in the sweep
+// (every second) and before refund reads / escrow release, so a stalled
+// refund never blocks the seller's payout forever and the buyer never loses
+// out because the seller did not tap.
+async function autoReleaseReturns() {
+  const shipped = await query("SELECT * FROM refunds WHERE status='awaiting_return' AND return_shipped_at IS NOT NULL AND return_shipped_at <> ''");
+  for (const rf of shipped) {
+    const at = returnAutoReleaseAt(rf);
+    if (at && new Date() >= new Date(at)) {
+      const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+      if (l) await releaseRefund(rf, l, 'auto');
+    }
+  }
+}
 async function expireRefundIfPast(l, rf) {
   if (!rf || !['pending', 'awaiting_return'].includes(rf.status)) return rf;
+  // A return already shipped back is never expired at the payout date - the
+  // buyer did their part, so it waits for the 48-hour auto-release instead.
+  if (rf.status === 'awaiting_return' && rf.return_shipped_at) return rf;
   const payout = await payoutFor(l);
   if (payout.payoutAt && new Date() >= new Date(payout.payoutAt)) {
     await query("UPDATE refunds SET status='expired' WHERE id=$1", [rf.id]);
@@ -198,6 +255,7 @@ async function expireRefundIfPast(l, rf) {
   return rf;
 }
 async function expireRefunds() {
+  await autoReleaseReturns();
   const open = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return')");
   for (const rf of open) {
     const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
@@ -258,7 +316,8 @@ app.get('/api/listings/:id', async (req, res) => {
   const qr = await qrForListing(l);
   const wheelItems = l.type === 'wheel' ? await wheelItemsFor(l.id) : [];
   const payout = await payoutFor(l);
-  const refund = await queryOne('SELECT * FROM refunds WHERE listing_id=$1 ORDER BY created_at DESC LIMIT 1', [l.id]);
+  const refundRow = await queryOne('SELECT * FROM refunds WHERE listing_id=$1 ORDER BY created_at DESC LIMIT 1', [l.id]);
+  const refund = withReturnDates(refundRow);
   res.json({ ...l, refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
@@ -553,6 +612,7 @@ app.post('/api/listings/:id/release-escrow', async (req, res) => {
   if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
   if (l.escrow_status === 'refunded') return res.json({ ok: false, error: 'a refund was already given on this sale' });
   const payout = await payoutFor(l);
+  await autoReleaseReturns();
   const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return')", [l.id]);
   if (openRefund) await expireRefundIfPast(l, openRefund);
   if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout });
@@ -741,8 +801,9 @@ app.get('/api/refunds/:id', async (req, res) => {
   const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  await autoReleaseReturns();
   if (l) await expireRefundIfPast(l, rf);
-  res.json(await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]));
+  res.json(withReturnDates(await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id])));
 });
 // Seller decides what happens with a refund request. Seller-only, only while
 // the request is still pending (before the seller has decided).
@@ -815,11 +876,28 @@ app.post('/api/refunds/:id/confirm-receipt', async (req, res) => {
   if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can confirm they got the item back' });
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
   if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the buyer has not shipped the item back yet' });
-  await query("UPDATE refunds SET return_received_at=$1, status='approved' WHERE id=$2", [nowISO(), rf.id]);
-  await query("UPDATE listings SET escrow_status='refunded' WHERE id=$1", [l.id]);
-  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-    [uid(), l.id, l.seller, 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.', nowISO()]);
+  await releaseRefund(rf, l, 'seller_confirmed');
   res.json({ ok: true, status: 'approved' });
+});
+// Return scanned as DELIVERED - the buyer must not lose out if the seller
+// never taps "I got it back". The buyer or the owner can record it from the
+// return tracking (the carrier scan). It releases the refund at once from
+// the seller's escrow money, exactly like a seller confirm - no seller tap
+// needed. TEST MODE: no live carrier feed is connected yet, so delivery is
+// recorded from this tracking / mark-as-delivered step; at go-live a real
+// carrier delivery scan will do this automatically.
+app.post('/api/refunds/:id/return-delivered', async (req, res) => {
+  const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
+  if (!rf) return res.json({ ok: false, error: 'not found' });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
+  if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the return has not been shipped back yet' });
+  const tracking = String(req.body.tracking || rf.return_tracking || rf.return_label_tracking || '').trim().slice(0, 100);
+  await query('UPDATE refunds SET return_tracking=$1, return_delivered_at=$2 WHERE id=$3', [tracking, nowISO(), rf.id]);
+  const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
+  await releaseRefund(fresh, l, 'delivered');
+  res.json({ ok: true, status: 'approved', tracking, deliveredAt: fresh.return_delivered_at });
 });
 // ---------- Founding / waitlist / dashboard / tax / report ----------
 app.post('/api/founding/claim', async (req, res) => {
@@ -999,7 +1077,7 @@ app.get('/api/dashboard', async (req, res) => {
   const tax = fees * (settings.tax_percent / 100);
   const unpaid = await query("SELECT * FROM listings WHERE status='ended' AND payment_status IN ('awaiting_payment','declined')");
   const refunds = await query("SELECT * FROM refunds WHERE status IN ('pending','awaiting_return')");
-  for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; } }
+  for (const rf of refunds) { const rl = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]); if (rl) { const rp = await payoutFor(rl); rf.refundDeadline = rp.payoutAt; rf.refundLabel = rp.payoutLabel; rf.title = rl.title; rf.seller = rl.seller; rf.returnAutoReleaseAt = returnAutoReleaseAt(rf); } }
   const escrowHeld = await query("SELECT * FROM listings WHERE escrow_status LIKE 'held%'");
   const held = [];
   for (const l of escrowHeld) { const payout = await payoutFor(l); held.push({ id: l.id, title: l.title, seller: l.seller, amount: l.escrow_amount, saleAmount: saleAmount(l), payout }); }

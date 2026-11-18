@@ -49,14 +49,22 @@ CREATE TABLE IF NOT EXISTS founding (id TEXT PRIMARY KEY, seller TEXT NOT NULL, 
 -- back - taken from the seller's money, not the buyer's and not the owner's
 -- fees. If the buyer never ships the return back before the refund window
 -- (payout date) closes, the refund expires (status 'expired') and no refund
--- is given. status values: 'pending' (seller deciding), 'awaiting_return',
+-- is given. Once the return IS shipped, it is never expired at the payout
+-- date - the buyer did their part. Delivery fix (Kevin, 2026-11-18): when the
+-- carrier scans the return as DELIVERED, the refund releases at once - no
+-- seller tap needed (return_delivered_at, POST /api/refunds/:id/
+-- return-delivered - in test mode delivery is recorded from the tracking /
+-- mark-as-delivered step, no live carrier feed yet - at go-live a real
+-- carrier delivery scan does it automatically). Safety net: if the seller
+-- never confirms receipt, the refund auto-releases 48 hours after the return
+-- was shipped. status values: 'pending' (seller deciding), 'awaiting_return',
 -- 'approved' (refund released from the seller's escrow money), 'expired'.
 CREATE TABLE IF NOT EXISTS refunds (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, requester TEXT NOT NULL, reason TEXT NOT NULL,
   photo_name TEXT, video_name TEXT, status TEXT DEFAULT 'pending', created_at TEXT NOT NULL,
   return_choice TEXT DEFAULT '', return_label_carrier TEXT DEFAULT '', return_label_tracking TEXT DEFAULT '',
   return_label_code TEXT DEFAULT '', return_cost REAL DEFAULT 0,
-  return_shipped_at TEXT, return_tracking TEXT DEFAULT '', return_received_at TEXT, decided_at TEXT
+  return_shipped_at TEXT, return_tracking TEXT DEFAULT '', return_received_at TEXT, return_delivered_at TEXT, decided_at TEXT
 );
 CREATE TABLE IF NOT EXISTS labels (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, carrier TEXT NOT NULL, tracking TEXT NOT NULL, code TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, receipt_no TEXT NOT NULL, amount REAL NOT NULL, shipping REAL NOT NULL, total REAL NOT NULL, created_at TEXT NOT NULL);
