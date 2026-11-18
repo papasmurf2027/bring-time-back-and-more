@@ -28,7 +28,7 @@ async function query(text, params = []) {
 async function queryOne(text, params = []) { const rows = await query(text, params); return rows[0] || null; }
 const uid = () => crypto.randomUUID();
 const nowISO = () => new Date().toISOString();
-// Shipping by package size (Whatnot-style US rates, buyer pays). The seller picks
+// Shipping by package size (US shipping rates, buyer pays). The seller picks
 // a size when listing; the buyer is charged that tier — no more guessing a $ amount.
 const SHIP_SIZES = {
   small: { label: 'Small — under 4 oz', price: 4.47 },
@@ -71,40 +71,30 @@ const CATEGORIES = ['Watches','Clothes','Shoes','Electronics','Collectibles','Ho
 function bannedHit(s) { const t = (s || '').toLowerCase(); return BANNED.find(b => t.includes(b)); }
 // ---------- No advertising other auction sites / marketplaces on this site ----------
 // Rule (Kevin, 2026-11-18): nobody may advertise another auction site or
-// marketplace on Bring Time Back and More — in chat, listings, reviews, Free
+// marketplace on Bring Time Back and More - in chat, listings, reviews, Free
 // Drops or show titles. Enforced server-side, not just in the browser, so it
 // cannot be skipped by calling the API directly. Existing posts are NOT
 // retroactively deleted; the block applies to new posts/listings only.
-// Allowed: this site's own links (bringtimebackandmore.com and its Railway
-// domain) and plain text with no links. A buyer simply mentioning a site in a
-// question ("did you buy this on ebay?") is allowed — it is only blocked when
-// it is a link, or a competitor name used to advertise a show/page.
+// Allowed: this site's own links and plain text with no links.
+// How it blocks, without naming any other site anywhere in the code:
+// any link to anywhere else is blocked, and so is advertising language
+// ("check out my show", "follow me", "click the link") - no other site's
+// name is written down anywhere, on the site or in the code.
 // What code CANNOT do: stop another site using Kevin's name elsewhere on the
-// internet. That needs a USPTO trademark filing (not done yet — ™ only, no ®)
+// internet. That needs a USPTO trademark filing (not done yet - TM only, no R)
 // plus takedown letters. This code only stops the advertising on THIS site.
-const AD_ERROR = 'No advertising other auction sites or marketplaces here — links to other sites are not allowed.';
+const AD_ERROR = 'No advertising other auction sites or marketplaces here - links to other sites are not allowed.';
 const OWN_DOMAINS = ['bringtimebackandmore.com', 'bring-time-back-and-more-production.up.railway.app'];
-const COMPETITOR_DOMAINS = ['whatnot.com', 'ebay.com', 'mercari.com', 'poshmark.com', 'offerup.com', 'craigslist.org', 'facebook.com', 'etsy.com', 'amazon.com', 'tiktok.com', 'shop.app', 'ebay.co.uk', 'whatnot.co.uk'];
-const COMPETITOR_NAMES = ['whatnot', 'ebay', 'mercari', 'poshmark', 'offerup', 'craigslist', 'etsy', 'amazon', 'tiktok'];
 const AD_PHRASES = ['check out', 'checkout', 'follow me', 'follow my', 'my show', 'my live', 'my page', 'my shop', 'my store', 'join me', 'come to', 'visit my', 'find me', 'see me on', 'watch me', 'my link', 'click the link'];
 function adHit(text) {
   const t = String(text || '').toLowerCase();
   if (!t.trim()) return false;
-  // 1) A named competitor domain — even without http:// — is advertising.
-  //    "whatnot dot com" / "ebay dot com" spellings count too.
-  for (const d of COMPETITOR_DOMAINS) if (t.includes(d)) return true;
-  for (const n of COMPETITOR_NAMES) if (new RegExp(n + '[\\s.]*dot[\\s.]*com').test(t)) return true;
-  // 2) Any other link, except this site's own links. Strip the own domains
-  //    first so bringtimebackandmore.com / the Railway domain stay allowed.
   let stripped = t;
   for (const d of OWN_DOMAINS) stripped = stripped.split(d).join('');
   if (/https?:\/\//.test(stripped) || /www\./.test(stripped)) return true;
   if (/\b[a-z0-9][a-z0-9-]*\.(com|net|shop|org|io|co|app|store|site)\b/.test(stripped)) return true;
-  // 3) Competitor name + an advertising phrase, even with no link:
-  //    "check out my whatnot show", "follow me on ebay", "my ebay page".
-  for (const n of COMPETITOR_NAMES) {
-    if (t.includes(n) && AD_PHRASES.some(p => t.includes(p))) return true;
-  }
+  if (/\bdot\s+com\b/.test(stripped)) return true;
+  for (const phrase of AD_PHRASES) if (t.includes(phrase)) return true;
   return false;
 }
 function feePercent(seller, founding) { return founding ? 5 : 10; } // founding forever rate 5%, normal 10%
