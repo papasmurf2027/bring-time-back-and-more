@@ -217,7 +217,8 @@ app.get('/api/listings/:id', async (req, res) => {
   const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   const qr = await qrForListing(l);
   const wheelItems = l.type === 'wheel' ? await wheelItemsFor(l.id) : [];
-  res.json({ ...l, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size) });
+  const payout = await payoutFor(l);
+  res.json({ ...l, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -441,18 +442,75 @@ app.post('/api/listings/:id/ship', async (req, res) => {
   await query('UPDATE listings SET tracking=$1, escrow_status=$2 WHERE id=$3', [req.body.tracking || l.tracking || '', 'held_waiting_delivery', l.id]);
   res.json({ ok: true });
 });
+// ---------- Tiered seller payout timing (Kevin, 2026-11-18) ----------
+// A seller's tier is earned by CLEAN completed sales: a sale that completed,
+// was paid, delivered and had its escrow released, with no pending or approved
+// refund and no dispute flag on it. The 12-hour refund window for buyers is
+// unchanged and separate — a payout must never release before that window
+// closes, and is blocked while a refund is pending.
+//   New seller:    0-2 clean sales.
+//   Trusted seller: 3-9 clean sales.
+//   Top seller:    10+ clean sales AND a good score (Seller Scorecard average
+//                  4.0 or more, if they have any scores at all; with no scores
+//                  yet, clean sales alone count).
+// Payout time after delivery confirmation:
+//   New:     under $100 = 3 days; $100 and up = 7 days.
+//   Trusted: under $100 = 12 hours; $100-$500 = 3 days; over $500 = 7 days.
+//   Top:     everything = 12 hours.
+// TEST MODE ONLY: these are tracked payout dates, not real bank transfers —
+// no real payment processor is connected yet.
+function saleAmount(l) { return l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0); }
+async function cleanSalesCount(seller) {
+  const rows = await query("SELECT * FROM listings WHERE seller=$1 AND status='sold' AND escrow_status='released'", [seller]);
+  let n = 0;
+  for (const r of rows) {
+    const bad = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [r.id]);
+    if (!bad) n++;
+  }
+  return n;
+}
+async function sellerTier(seller) {
+  const clean = await cleanSalesCount(seller);
+  const sc = await queryOne('SELECT AVG(stars) AS avg, COUNT(*) AS n FROM reviews WHERE seller=$1', [seller]);
+  const score = sc && sc.avg !== null && sc.avg !== undefined ? Number(sc.avg) : null;
+  const scoreCount = sc ? Number(sc.n || 0) : 0;
+  let tier = 'New';
+  if (clean >= 10 && (score === null || score >= 4.0)) tier = 'Top';
+  else if (clean >= 3) tier = 'Trusted';
+  const nextTier = tier === 'New' ? 'Trusted' : tier === 'Trusted' ? 'Top' : null;
+  const salesToNext = tier === 'New' ? Math.max(0, 3 - clean) : tier === 'Trusted' ? Math.max(0, 10 - clean) : 0;
+  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext };
+}
+function payoutHoursFor(tier, amount) {
+  if (tier === 'Top') return 12;
+  if (tier === 'Trusted') return amount < 100 ? 12 : amount <= 500 ? 72 : 168;
+  return amount < 100 ? 72 : 168; // New
+}
+function payoutLabelFor(hours) { return hours === 12 ? '12 hours' : hours === 72 ? '3 days' : '7 days'; }
+async function payoutFor(l) {
+  const t = await sellerTier(l.seller);
+  const amount = saleAmount(l);
+  const hours = payoutHoursFor(t.tier, amount);
+  const payoutAt = l.delivered_at ? new Date(new Date(l.delivered_at).getTime() + hours * 3600 * 1000).toISOString() : null;
+  return { ...t, amount, payoutHours: hours, payoutLabel: payoutLabelFor(hours), payoutAt };
+}
 app.post('/api/listings/:id/deliver', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || !l.tracking) return res.json({ ok: false, error: 'tracking must be on file first' });
   await query('UPDATE listings SET delivered=1, delivered_at=$1, escrow_status=$2 WHERE id=$3', [nowISO(), 'held_refund_window', l.id]);
-  res.json({ ok: true, releaseAt: new Date(Date.now() + 12 * 3600 * 1000).toISOString() });
+  const updated = await queryOne('SELECT * FROM listings WHERE id=$1', [l.id]);
+  const payout = await payoutFor(updated);
+  res.json({ ok: true, releaseAt: payout.payoutAt, payout });
 });
 app.post('/api/listings/:id/release-escrow', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (!l.delivered_at || Date.now() - new Date(l.delivered_at).getTime() < 12 * 3600 * 1000) return res.json({ ok: false, error: '12-hour refund window is still open' });
-  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status='pending'", [l.id]);
-  if (refund) return res.json({ ok: false, error: 'a refund request is pending' });
+  if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
+  const payout = await payoutFor(l);
+  if (Date.now() - new Date(l.delivered_at).getTime() < 12 * 3600 * 1000) return res.json({ ok: false, error: '12-hour refund window is still open', payout });
+  if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'payout is not due yet — ' + payout.tier + ' seller, ' + payout.payoutLabel + ' after delivery. Payout date: ' + payout.payoutAt, payout });
+  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [l.id]);
+  if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
   await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
   res.json({ ok: true });
 });
@@ -547,7 +605,9 @@ app.post('/api/top-limit', async (req, res) => {
   res.json({ ok: true });
 });
 app.post('/api/reviews', async (req, res) => {
-  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.listingId]);
+  // listingId comes in the body (the route has no :listingId param) — the old
+  // code read req.params.listingId, which is undefined and crashed the server.
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.body.listingId]);
   if (!l || l.winner !== req.body.reviewer) return res.json({ ok: false, error: 'only the winner can leave a score' });
   if (adHit(req.body.comment || '')) return res.json({ ok: false, error: AD_ERROR });
   await query('INSERT INTO reviews(id,listing_id,seller,reviewer,stars,comment,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
@@ -749,16 +809,62 @@ app.post('/api/waitlist/live-notice', async (req, res) => {
     return res.json({ ...preview, ok: false, sent: false, mode: 'resend', error: 'Resend request failed: ' + e.message });
   }
 });
+app.get('/api/payout-tier/:seller', async (req, res) => {
+  const t = await sellerTier(req.params.seller);
+  res.json({ seller: req.params.seller, ...t, note: 'Test mode — payout dates are tracked dates, not real bank transfers. No real payment processor is connected yet.' });
+});
 app.get('/api/dashboard', async (req, res) => {
   const settings = await getSettings();
   const sold = await query("SELECT * FROM listings WHERE status='sold' AND escrow_status='released'");
   let fees = 0;
-  for (const l of sold) { const pct = (await isFounding(l.seller)) ? 5 : 10; fees += ((l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0)) * pct) / 100; }
+  // ---------- Safe to take out (owner draw) ----------
+  // Only Kevin's FEES ever count here — seller escrow money is never his
+  // money and is never counted. A fee is SAFE to draw only when its sale is
+  // past delivery + the 12-hour refund window, the seller has been paid, there
+  // is no refund or dispute on it, AND it is older than 30 days. 30 days is
+  // the practical safe point used here — the full bank chargeback window is
+  // 60-120 days, so a chargeback can still come in after 30 days, just far
+  // less often. Fees from sales in the last 30 days are NOT safe yet, and the
+  // date each batch becomes safe is shown. Recommended reserve to leave in the
+  // business: 1 to 2 months of fees, or at minimum all not-yet-safe fees,
+  // whichever is larger. "Months of fees" here means 2 x the fees from sales
+  // delivered in the last 30 days.
+  const now = Date.now();
+  const DAY = 24 * 3600 * 1000;
+  let safeFees = 0, notSafeFees = 0, last30Fees = 0;
+  const notSafe = [];
+  for (const l of sold) {
+    const pct = (await isFounding(l.seller)) ? 5 : 10;
+    const fee = Math.round(saleAmount(l) * pct) / 100;
+    fees += fee;
+    const delivered = l.delivered_at ? new Date(l.delivered_at).getTime() : null;
+    const badRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','approved')", [l.id]);
+    if (!delivered || badRefund || now - delivered < 12 * 3600 * 1000) continue;
+    const safeDate = new Date(delivered + 30 * DAY).toISOString();
+    if (now - delivered < 30 * DAY) last30Fees += fee;
+    if (now >= delivered + 30 * DAY) safeFees += fee;
+    else { notSafeFees += fee; notSafe.push({ id: l.id, title: l.title, seller: l.seller, fee: Math.round(fee * 100) / 100, safeDate }); }
+  }
+  const reserve = Math.round(Math.max(notSafeFees, 2 * last30Fees) * 100) / 100;
+  const safeAfterTax = Math.round(safeFees * (1 - settings.tax_percent / 100) * 100) / 100;
+  const safeDraw = {
+    totalFeesEarned: Math.round(fees * 100) / 100,
+    safeFees: Math.round(safeFees * 100) / 100,
+    safeToDraw: safeAfterTax,
+    notSafeFees: Math.round(notSafeFees * 100) / 100,
+    notSafe,
+    monthlyFees: Math.round(last30Fees * 100) / 100,
+    reserve,
+    alert: safeAfterTax > 0 ? 'Safe to take out: $' + safeAfterTax.toFixed(2) + ' — leave $' + reserve.toFixed(2) + ' in the business to cover chargebacks.' : null,
+    note: 'Safe = fee from a sale delivered over 30 days ago, past the 12-hour refund window, seller paid, no refund or dispute. The full bank chargeback window is 60-120 days — 30 days is the practical safe point, not a guarantee. Only your fees count here, never seller escrow money.'
+  };
   const tax = fees * (settings.tax_percent / 100);
   const unpaid = await query("SELECT * FROM listings WHERE status='ended' AND payment_status IN ('awaiting_payment','declined')");
   const refunds = await query("SELECT * FROM refunds WHERE status='pending'");
   const escrowHeld = await query("SELECT * FROM listings WHERE escrow_status LIKE 'held%'");
-  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: escrowHeld.map(l => ({ id: l.id, title: l.title, amount: l.escrow_amount })) });
+  const held = [];
+  for (const l of escrowHeld) { const payout = await payoutFor(l); held.push({ id: l.id, title: l.title, seller: l.seller, amount: l.escrow_amount, saleAmount: saleAmount(l), payout }); }
+  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw });
 });
 app.post('/api/settings/tax', async (req, res) => {
   const p = Number(req.body.percent);
