@@ -1,0 +1,23 @@
+body{font-family:system-ui,-apple-system,Segoe UI,Arial,sans-serif;margin:0;background:#0b1e3a;color:#fff}
+a{color:#f5c542}header{background:#081426;padding:14px 16px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+header img{height:64px;border:2px solid #f5c542;border-radius:8px}
+h1{margin:0;font-size:22px;color:#f5c542}.tag{color:#cfe0ff;margin:0}
+.banner{background:#b00020;color:#fff;padding:10px 16px;font-weight:700;text-align:center}
+.banner b{color:#ffe082}
+main{max-width:1000px;margin:0 auto;padding:16px}
+.btn{background:#f5c542;color:#081426;border:0;padding:14px 22px;font-size:18px;font-weight:800;border-radius:10px;cursor:pointer;margin:6px 6px 6px 0}
+.btn.green{background:#2e9e4f;color:#fff}.btn.red{background:#c62828;color:#fff}.btn.ghost{background:transparent;color:#f5c542;border:2px solid #f5c542}
+.card{background:#12294d;border:1px solid #2c4a7a;border-radius:12px;padding:14px;margin:12px 0}
+.card h3{margin:0 0 6px;color:#f5c542}
+input,select,textarea{width:100%;padding:10px;margin:6px 0;border-radius:8px;border:1px solid #888;box-sizing:border-box;font-size:16px}
+label{font-weight:700}.small{color:#bcd0f5;font-size:14px}
+.tiles{display:flex;flex-wrap:wrap;gap:8px}.tile{background:#12294d;border:1px solid #f5c542;border-radius:10px;padding:10px 14px;cursor:pointer}
+.tile.active{background:#f5c542;color:#081426;font-weight:800}
+.badge{display:inline-block;background:#c62828;color:#fff;padding:3px 8px;border-radius:20px;font-weight:800;font-size:13px}
+.badge.green{background:#2e9e4f}.badge.gold{background:#f5c542;color:#081426}
+.grid{display:grid;grid-template-columns:1fr;gap:12px}
+@media(min-width:700px){.grid{grid-template-columns:1fr 1fr}}
+footer{padding:20px;text-align:center;color:#bcd0f5;border-top:1px solid #2c4a7a}
+.chat{max-height:220px;overflow:auto;background:#081426;border-radius:8px;padding:10px}
+.chat p{margin:6px 0}.timer{font-size:28px;font-weight:900;color:#f5c542}
+h2{color:#f5c542}
