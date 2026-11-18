@@ -84,3 +84,8 @@ curl -X POST localhost:3000/api/listings/<ID>/bid -H 'Content-Type: application/
 - Chat polls on page load, not live-push; the front end refreshes listings every 15s.
 - Camera Go Live sets the LIVE NOW status only — no video is streamed (same honest limit as v21).
 - Test listings in the local `data.db` are throwaway; Railway Postgres starts empty.
+
+## Time Wheel
+- A third listing type alongside Auction and Store. The seller loads the wheel with 1–100 items (one per line in the sell form); buyers see every item on the clock-face wheel (gold + dark navy, gold hand) before bidding.
+- Bidding works like a normal auction (timer, Sudden Death / Regular, shipping by package size, buyer pays shipping, insured required). The winner pays the winning bid + shipping; on payment validation the wheel spins (server picks one item at random with `crypto.randomInt`) and lands on ONE item — that item is what the winner gets. No extra prize, no extra charge. Nobody buys a spot and nobody pays to spin.
+- The landed item is recorded on the listing (`wheel_landed_item`), announced in the room chat, named on the receipt (`GET /api/receipt/:id` returns `landedItem`), and named in the ship-QR section so the seller ships the right item. `POST /api/listings/:id/spin` is a seller/winner-only fallback that returns the already-landed item if the wheel has spun. Rerunning clears the spin; the wheel items stay.

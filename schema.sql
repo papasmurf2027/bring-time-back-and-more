@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS listings (
   escrow_status TEXT DEFAULT 'not_started', escrow_amount REAL DEFAULT 0,
   tracking TEXT, delivered INTEGER DEFAULT 0, delivered_at TEXT, seller_live INTEGER DEFAULT 0, seller_live_at TEXT,
   buy_now_offer REAL, buy_now_offer_by TEXT, image_url TEXT DEFAULT '',
-  package_size TEXT DEFAULT '', shipped_at TEXT
+  package_size TEXT DEFAULT '', shipped_at TEXT,
+  wheel_landed_item TEXT DEFAULT '', wheel_landed_at TEXT, wheel_spun INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS bids (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, bidder TEXT NOT NULL, amount REAL NOT NULL, created_at TEXT NOT NULL
@@ -44,6 +45,13 @@ CREATE TABLE IF NOT EXISTS receipts (id TEXT PRIMARY KEY, listing_id TEXT NOT NU
 CREATE TABLE IF NOT EXISTS live_notice (
   id INTEGER PRIMARY KEY, sent_at TEXT NOT NULL, mode TEXT NOT NULL,
   recipient_count INTEGER DEFAULT 0, subject TEXT DEFAULT ''
+);
+-- Time Wheel: items loaded on a wheel listing (up to 100). The winner pays the
+-- winning bid + shipping, the wheel spins and lands on ONE item — that item is
+-- what they get. No spots to buy, no paying to spin, no extra prize or charge.
+CREATE TABLE IF NOT EXISTS wheel_items (
+  id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, name TEXT NOT NULL,
+  photo_url TEXT DEFAULT '', position INTEGER DEFAULT 0, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS live_signals (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL DEFAULT '',
