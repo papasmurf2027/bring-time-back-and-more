@@ -372,7 +372,7 @@ function wirePC(pc,id,peerId){
 }
 function stopLivePoll(){if(livePoll){clearInterval(livePoll);livePoll=null;}}
 function stopLiveFull(){
-  stopLivePoll();
+  stopLivePoll(); stopPresence();
   for(const k of Object.keys(livePCs)){try{livePCs[k].close();}catch(e){}}
   livePCs={};
   if(liveStream){liveStream.getTracks().forEach(t=>t.stop());liveStream=null;}
@@ -419,6 +419,30 @@ async function startViewer(id){
 async function startSellerPoll(id){
   liveSince=new Date().toISOString();
   stopLivePoll(); livePoll=setInterval(()=>pollSignals(id),2000);
+}
+// ---------- Watching count (Kevin, 2026-11-19) ----------
+// The seller sees how many people are in their room, in the site's own
+// gold + dark navy design. Everyone with the room open checks in every 15
+// seconds; the count line refreshes on the same beat, seller only.
+let presenceTimer=null, presenceId=null;
+async function presencePing(id,leave){
+  if(!currentUser)return;
+  try{await j('/api/listings/'+id+'/presence',leave?{leave:true}:{});}catch(e){}
+  if(!leave)refreshWatching(id);
+}
+async function refreshWatching(id){
+  const el=document.getElementById('watchingLine'); if(!el)return;
+  try{const l=await j('/api/listings/'+id); if(l&&typeof l.watching==='number')el.textContent=`👥 ${l.watching} watching now`;}catch(e){}
+}
+function startPresence(id){
+  if(presenceId===id&&presenceTimer)return;
+  stopPresence();
+  presenceId=id; presencePing(id);
+  presenceTimer=setInterval(()=>presencePing(id),15000);
+}
+function stopPresence(){
+  if(presenceTimer){clearInterval(presenceTimer);presenceTimer=null;}
+  if(presenceId){const id=presenceId; presenceId=null; presencePing(id,true);}
 }
 // ---------- Time Wheel (Kevin's own design — a clock-face wheel, gold + dark navy) ----------
 // Items sit around the wheel like numbers on a clock; a gold hand at the top
@@ -535,6 +559,8 @@ async function openItem(id){
   if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
   liveListingId=id;
   const l=await j('/api/listings/'+id);
+  const isSellerRoom=currentUser&&(l.seller_user_id?currentUser.id===l.seller_user_id:currentUser.name===l.seller);
+  startPresence(id);
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
@@ -564,6 +590,7 @@ async function openItem(id){
   ${l.shipped_at?`<p><span class="badge green">Marked as shipped ${l.shipped_at}</span></p>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}
   <p id="shipMsg" class="small"></p></div>`:''}
   <h3>Live video ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3>
+  ${isSellerRoom&&l.seller_live?`<p id="watchingLine" style="color:#f5c542;font-weight:800;margin:6px 0">👥 ${l.watching||0} watching now</p>`:''}
   <video id="liveVideo" playsinline autoplay style="width:100%;max-height:420px;background:#000;border-radius:10px;display:none"></video>
   <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <p id="liveStatus" class="small">${l.seller_live?'Seller is live — connecting to live video…':'Seller is not live yet. When they go live, their camera shows here.'}</p>
@@ -631,6 +658,7 @@ async function goLive(id){
   const b=document.getElementById('endLiveBtn'); if(b)b.style.display='inline-block';
   setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
   startSellerPoll(id);
+  startPresence(id);
   alert('You are LIVE NOW — buyers can see your camera.');
 }
 async function endLive(id){
