@@ -105,15 +105,15 @@ function show(w){document.getElementById('sellSec').style.display=w==='sell'?'bl
 async function load(){
   const o=await j('/api/overview');
   document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. 0% until it goes live, then 5% forever. Normal fee 10%.`;
-  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.status==='live').map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${escHtml(l.seller)}</b> — ${escHtml(l.title)} — $${l.current_bid} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
+  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.status==='live').map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${escHtml(l.seller)}</b> — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   let rows=o.listings.filter(l=>!curType||l.type===curType); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
   document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
-  <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel • '+escHtml(l.mode):'Auction • '+escHtml(l.mode)} • ${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} items on the wheel`:''}</p>
+  <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
-  <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
+  <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">Status: ${escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
   const d=await j('/api/drops'); document.getElementById('drops').innerHTML=d.map(x=>`<p>Free Drop: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.status)} ${x.winner?'winner: '+escHtml(x.winner):''}</p>`).join('');
@@ -322,7 +322,8 @@ function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const
 async function createListing(){
   if(needSignIn())return;
   const size=document.getElementById('sSize').value;
-  const wheelItems=(document.getElementById('sWheel').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
+  const _sw=document.getElementById('sWheel');
+  const wheelItems=_sw?(_sw.value||'').split('\n').map(s=>s.trim()).filter(Boolean):[];
   const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
@@ -460,22 +461,39 @@ function wheelSVG(l,rotDeg){
   <polygon points="160,2 148,26 172,26" fill="#f5d76e" stroke="#c9a227" stroke-width="1"/></svg>`;
 }
 function wheelPanel(l){
-  const items=l.wheel_items||[];
-  const landedIdx=items.findIndex(x=>x.name===l.wheel_landed_item);
-  const rot=l.wheel_spun&&landedIdx>=0?-wheelAngle(landedIdx,items.length):0;
+  // FREE giveaway: the wheel holds the NAMES of the people who entered free.
+  const names=(l.wheel_entries||[]).map(x=>({name:x.name}));
+  const landedIdx=names.findIndex(x=>x.name===l.wheel_landed_item);
+  const rot=l.wheel_spun&&landedIdx>=0?-wheelAngle(landedIdx,names.length):0;
+  const isSeller=currentUser&&l.seller_user_id?currentUser.id===l.seller_user_id:currentUser&&currentUser.name===l.seller;
+  const isWinner=currentUser&&l.winner&&currentUser.name===l.winner;
   let status='';
-  if(l.wheel_spun&&l.wheel_landed_item)status=`<p><b>⏰ The wheel landed on: ${escHtml(l.wheel_landed_item)}</b> — that is the item ${escHtml(l.winner||'the winner')} gets. No extra prize, no extra charge.</p>`;
-  else if(l.status==='sold'&&l.payment_status==='validated')status=`<p>The winner has paid — spin the wheel to see what they get.</p><button class="btn" onclick="spinWheel('${l.id}')">Spin the Time Wheel</button>`;
-  else if(l.status==='ended')status=`<p class="small">The wheel spins once the winner pays.</p>`;
-  else status=`<p class="small">Bidding is for the wheel — the winner pays the winning bid + shipping, then the wheel spins and lands on one item. That item is what they get.</p>`;
+  if(l.wheel_spun&&l.wheel_landed_item){
+    status=`<p><b>⏰ The wheel landed on: ${escHtml(l.wheel_landed_item)}</b> — they win <b>${escHtml(l.title)}</b> FREE!</p>`
+      +(isWinner?`<p><b>You won!</b> The seller will ship it to the address on your account — no payment, nothing to pay.</p>`:'')
+      +(isSeller?`<p><b>Seller — ship it to (locked at win): ${escHtml(l.winner_address||'—')}</b><br>Carrier: <b>${escHtml(l.carrier||'')}</b> • Tracking: <b>${escHtml(l.tracking||'—')}</b> (test label only, no real carrier connected yet).<br>${l.shipped_at?`<span class="badge green">Marked as shipped ${escHtml(l.shipped_at)}</span>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}</p>`:'');
+  } else if(l.status==='ended'){
+    status=`<p class="small">Entries closed — nobody entered, so the wheel had no names to land on.</p>`;
+  } else {
+    status=`<p class="small">FREE giveaway — enter free and your name goes on the wheel. Entries stay open until the timer runs out, then the wheel spins itself — or the seller spins it by hand. The winner gets this item free.</p>`
+      +(l.wheel_entered?`<p><b>You are on the wheel!</b> One entry per person.</p>`:`<button class="btn" onclick="enterWheel('${l.id}')">Enter free — put my name on the wheel</button>`)
+      +(isSeller&&names.length?` <button class="btn ghost" onclick="spinWheel('${l.id}')">Spin the Time Wheel</button>`:'');
+  }
   return `<div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:10px;background:#0b1f3a">
-  <h3 style="color:#f5d76e;margin-top:0">⏰ Time Wheel — ${items.length} item${items.length===1?'':'s'}</h3>
-  <p class="small" style="color:#f5d76e">You win the item the wheel lands on — no extra prize, no extra charge. Nobody buys a spot, nobody pays to spin.</p>
-  ${wheelSVG(l,rot)}
+  <h3 style="color:#f5d76e;margin-top:0">⏰ Time Wheel — ${names.length} name${names.length===1?'':'s'} on the wheel</h3>
+  <p class="small" style="color:#f5d76e">Free giveaway — nobody pays, nobody buys a spot. The winner gets this item free.</p>
+  ${wheelSVG({...l,wheel_items:names},rot)}
   ${status}
   <p id="wheelMsg" class="small"></p>
-  <details><summary class="small">See all ${items.length} items on the wheel</summary><ol class="small">${items.map(x=>`<li>${escHtml(x.name)}</li>`).join('')}</ol></details>
+  <details><summary class="small">See all ${names.length} names on the wheel</summary><ol class="small">${names.map(x=>`<li>${escHtml(x.name)}</li>`).join('')}</ol></details>
   </div>`;
+}
+async function enterWheel(id){
+  if(needSignIn())return;
+  const r=await j('/api/listings/'+id+'/enter',{});
+  if(!r.ok){alert('Error: '+r.error);return;}
+  alert('You are in! Your name is on the wheel.');
+  openItem(id);
 }
 async function spinWheel(id){
   if(needSignIn())return;
@@ -483,9 +501,9 @@ async function spinWheel(id){
   const r=await j('/api/listings/'+id+'/spin',{},sellerHeaders(name)); noteSellerToken(name,r);
   if(!r.ok){alert('Error: '+r.error);return;}
   const l=await j('/api/listings/'+id);
-  const items=l.wheel_items||[];
-  const idx=Math.max(0,items.findIndex(x=>x.name===r.landedItem));
-  const target=360*6-wheelAngle(idx,items.length||1);
+  const names=l.wheel_entries||[];
+  const idx=Math.max(0,names.findIndex(x=>x.name===r.landedName));
+  const target=360*6-wheelAngle(idx,names.length||1);
   const dial=document.getElementById('wheelDial');
   if(dial){dial.style.transition='transform 4s cubic-bezier(.15,.8,.25,1)';dial.style.transform=`rotate(${target}deg)`;}
   const msg=document.getElementById('wheelMsg'); if(msg)msg.textContent='⏰ Spinning…';
@@ -500,7 +518,8 @@ async function openItem(id){
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
-  ${(l.type==='auction'||l.type==='wheel')?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
+  ${l.type==='wheel'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
+  :l.type==='auction'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <label>Your name <input id="bName"></label><label>Bid $ <input id="bAmt" type="number" value="${l.current_bid+1}"></label>
   <button class="btn" onclick="bid('${l.id}',1)">+$1</button><button class="btn" onclick="bid('${l.id}',5)">+$5</button><button class="btn" onclick="bid('${l.id}',10)">+$10</button>
   <button class="btn" onclick="bidCustom('${l.id}')">Place custom bid</button>
@@ -510,7 +529,7 @@ async function openItem(id){
   <label>Your name <input id="bName"></label><label>Payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Apple Pay</option><option>Google Pay</option><option>Cash App</option><option>Venmo</option><option>bank</option></select></label>
   <p class="small"><b>TEST MODE — do not type a real card number here. No real payment is taken.</b> Type any test detail to pass, or type 'declined' to test a failed payment.</p><label>Payment detail <input id="pDetail" placeholder="Test detail only — never a real card number"></label>
   <button class="btn green" onclick="buyNow('${l.id}')">Buy Now — check my payment first</button>`}
-  ${l.status==='ended'?`<p><b>Winner: ${escHtml(l.winner||'—')}</b> — ${l.payment_status==='validated'?'Payment went through — in escrow hold':l.payment_status==='declined'?'Payment declined — buyer needs to fix payment':'Waiting for winner payment'}</p>
+  ${l.status==='ended'&&l.type!=='wheel'?`<p><b>Winner: ${escHtml(l.winner||'—')}</b> — ${l.payment_status==='validated'?'Payment went through — in escrow hold':l.payment_status==='declined'?'Payment declined — buyer needs to fix payment':'Waiting for winner payment'}</p>
   ${l.payment_status==='declined'?`<div style="background:#c62828;padding:14px;border-radius:10px"><h3>PAYMENT DIDN'T GO THROUGH! Don't lose this sale — pick one</h3><button class="btn" onclick="fixPay('${l.id}')">Fix Payment</button><button class="btn" onclick="rerun('${l.id}','${escJs(l.seller)}')">Rerun Auction</button></div>`:''}
   <label>Winner payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Venmo</option></select></label><p class="small"><b>TEST MODE — do not type a real card number here. No real payment is taken.</b></p><label>Detail <input id="pDetail" placeholder="Test detail only — never a real card number"></label><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
   ${l.payout?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>💰 Seller payout — ${escHtml(l.payout.tier)} seller</h3>${l.payout.incorrectClaims?`<p><b>Incorrect return claims: ${l.payout.incorrectClaims}</b> — ${l.payout.banned?'selling privileges removed — this seller cannot sell on the site again.':l.payout.canSell?'suspension ended — selling is open again.':'selling privileges suspended until <b>'+new Date(l.payout.suspendedUntil).toLocaleString()+'</b> — listings are hidden and no new items can be listed until then.'}</p>`:''}<p><b>${escHtml(l.seller)}</b> has <b>${l.payout.cleanSales} clean sale${l.payout.cleanSales===1?'':'s'}</b>${l.payout.score!==null?` • Seller Scorecard: ${l.payout.score}/5`:''}${l.payout.nextTier?` • <b>${l.payout.salesToNext} more clean sale${l.payout.salesToNext===1?'':'s'}</b> to ${escHtml(l.payout.nextTier)}`:' • top tier — fastest payout on everything'}.<br>Sale amount $${l.payout.amount} — payout <b>${l.payout.payoutLabel} after delivery</b>${l.payout.payoutAt?` — <b>payout date: ${new Date(l.payout.payoutAt).toLocaleString()}</b>`:' (payout date is set once delivery is confirmed)'}${l.escrow_status==='released'?` — <b>paid out</b>`:''}.</p><p class="small">The refund window runs until this payout date — legit reason + photo + video only, and no refund after that date. A payout never comes out while a refund is pending. Test mode: this is a tracked payout date, not a real bank transfer — no real payment processor is connected yet.</p></div>`:''}
