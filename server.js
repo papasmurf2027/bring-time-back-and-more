@@ -802,6 +802,7 @@ async function expireRefunds() {
   }
 }
 // Auto-end timers + draw free drops, every second.
+let _lastAutoRelease = 0; // auto escrow release runs once a minute, not every sweep tick
 async function sweep() {
   try {
     await expireRefunds();
@@ -827,6 +828,15 @@ async function sweep() {
       const entries = await query('SELECT * FROM drop_entries WHERE drop_id=$1', [d.id]);
       const winner = entries.length ? entries[Math.floor(Math.random() * entries.length)].name : null;
       await query('UPDATE drops SET status=$1, winner=$2 WHERE id=$3', [winner ? 'drawn' : 'closed', winner, d.id]);
+    }
+    // Auto-release escrow (Kevin, 2026-11-19): once a minute, release
+    // any delivered sale whose payout date has passed with no open
+    // refund — the same checks as the manual release button. Without
+    // this a seller who never taps the button never gets paid.
+    if (Date.now() - _lastAutoRelease > 60000) {
+      _lastAutoRelease = Date.now();
+      const due = await query("SELECT * FROM listings WHERE escrow_status IN ('held_waiting_delivery','held_refund_window') AND delivered_at IS NOT NULL");
+      for (const l of due) await tryReleaseEscrow(l);
     }
   } catch (e) { console.error('sweep', e.message); }
 }
@@ -918,10 +928,6 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random,seller_user_id,no_change_of_mind)
     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20,$21,$22)`,
     [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
-  for (let i = 0; i < wheelItems.length; i++) {
-    await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-      [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
-  }
   return id;
 }
 app.post('/api/listings', async (req, res) => {
@@ -1300,21 +1306,33 @@ app.post('/api/listings/:id/deliver', async (req, res) => {
   const payout = await payoutFor(updated);
   res.json({ ok: true, releaseAt: payout.payoutAt, payout, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
+// Auto-release escrow (Kevin, 2026-11-19): the same checks as the manual
+// release-escrow button, shared by the button and the sweep. A sale is
+// released only when it was delivered, the payout date (refund window
+// close) has passed, and no refund is open. A seller who never taps the
+// button still gets paid — without this the money would sit in escrow
+// forever if the seller forgets.
+async function tryReleaseEscrow(l) {
+  if (!l.delivered_at) return { ok: false, error: 'not delivered yet' };
+  if (l.escrow_status === 'released') return { ok: false, error: 'already released' };
+  if (l.escrow_status === 'refunded') return { ok: false, error: 'a refund was already given on this sale' };
+  const payout = await payoutFor(l);
+  await autoReleaseReturns();
+  const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
+  if (openRefund) await expireRefundIfPast(l, openRefund);
+  if (new Date() < new Date(payout.payoutAt)) return { ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout };
+  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
+  if (refund) return { ok: false, error: 'a refund request is pending', payout };
+  await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
+  return { ok: true, payout };
+}
 app.post('/api/listings/:id/release-escrow', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (!await requireSellerFor(req, res, l)) return;
   const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
-  if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
-  if (l.escrow_status === 'refunded') return res.json({ ok: false, error: 'a refund was already given on this sale' });
-  const payout = await payoutFor(l);
-  await autoReleaseReturns();
-  const openRefund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
-  if (openRefund) await expireRefundIfPast(l, openRefund);
-  if (new Date() < new Date(payout.payoutAt)) return res.json({ ok: false, error: 'refund window is still open — refunds close on the payout date (' + payout.payoutLabel + ' after delivery). Payout date: ' + payout.payoutAt, payout });
-  const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
-  if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
-  await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
+  const r = await tryReleaseEscrow(l);
+  if (!r.ok) return res.json({ ok: false, error: r.error, payout: r.payout });
   res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 
