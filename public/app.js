@@ -439,31 +439,46 @@ function wheelSVG(l,rotDeg){
     const a=wheelAngle(i,n)*Math.PI/180;
     const x=cx+r*Math.sin(a), y=cy-r*Math.cos(a);
     const label=String(it.name||'').slice(0,18);
-    texts+=`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#f5d76e" font-size="${font}" font-weight="600" transform="rotate(${wheelAngle(i,n)} ${x.toFixed(1)} ${y.toFixed(1)})">${escHtml(label)}</text>`;
+    texts+=`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#0b1f3a" font-size="${font}" font-weight="700" transform="rotate(${wheelAngle(i,n)} ${x.toFixed(1)} ${y.toFixed(1)})">${escHtml(label)}</text>`;
   });
-  // Clock-face marks, like the pocket-watch clock in the logo: 12 gold hour
-  // ticks (longer at 12, 3, 6 and 9) and a dot for every other minute.
+  // Rim marks, like the clock in the first logo: 12 dark navy hour ticks
+  // (longer at 12, 3, 6 and 9) and a dot for every other minute.
   let marks='';
   for(let h=0;h<12;h++){
     const a=h*30*Math.PI/180, q=h%3===0;
     const o=146, inr=q?128:136;
-    marks+=`<line x1="${(cx+o*Math.sin(a)).toFixed(1)}" y1="${(cy-o*Math.cos(a)).toFixed(1)}" x2="${(cx+inr*Math.sin(a)).toFixed(1)}" y2="${(cy-inr*Math.cos(a)).toFixed(1)}" stroke="#c9a227" stroke-width="${q?4:2.5}" stroke-linecap="round"/>`;
+    marks+=`<line x1="${(cx+o*Math.sin(a)).toFixed(1)}" y1="${(cy-o*Math.cos(a)).toFixed(1)}" x2="${(cx+inr*Math.sin(a)).toFixed(1)}" y2="${(cy-inr*Math.cos(a)).toFixed(1)}" stroke="#0b1f3a" stroke-width="${q?4:2.5}" stroke-linecap="round"/>`;
   }
   for(let m=0;m<60;m++){
     if(m%5===0)continue;
     const a=m*6*Math.PI/180;
-    marks+=`<circle cx="${(cx+141*Math.sin(a)).toFixed(1)}" cy="${(cy-141*Math.cos(a)).toFixed(1)}" r="1.6" fill="#c9a227" opacity="0.6"/>`;
+    marks+=`<circle cx="${(cx+141*Math.sin(a)).toFixed(1)}" cy="${(cy-141*Math.cos(a)).toFixed(1)}" r="1.6" fill="#0b1f3a" opacity="0.45"/>`;
   }
-  return `<svg viewBox="0 -32 320 352" style="width:100%;max-width:340px;display:block;margin:0 auto">
-  <circle cx="160" cy="-20" r="10" fill="none" stroke="#c9a227" stroke-width="3"/>
-  <rect x="155" y="-12" width="10" height="20" rx="2" fill="#c9a227"/>
-  <circle cx="160" cy="160" r="152" fill="#0b1f3a" stroke="#c9a227" stroke-width="4"/>
-  <circle cx="160" cy="160" r="138" fill="none" stroke="#c9a227" stroke-width="1" opacity="0.5"/>
+  // The little clock in the middle, like the clock in the first logo: white
+  // face, gold ring, dark navy rim, ticks, hands at 10:10.
+  let clockTicks='';
+  for(let h=0;h<12;h++){
+    const a=h*30*Math.PI/180, q=h%3===0;
+    const o=54, inr=q?46:50;
+    clockTicks+=`<line x1="${(cx+o*Math.sin(a)).toFixed(1)}" y1="${(cy-o*Math.cos(a)).toFixed(1)}" x2="${(cx+inr*Math.sin(a)).toFixed(1)}" y2="${(cy-inr*Math.cos(a)).toFixed(1)}" stroke="#0b1f3a" stroke-width="${q?3.5:2.5}" stroke-linecap="round"/>`;
+  }
+  return `<svg viewBox="0 -32 320 388" style="width:100%;max-width:340px;display:block;margin:0 auto">
+  <circle cx="160" cy="160" r="152" fill="#ffffff" stroke="#0b1f3a" stroke-width="6"/>
   ${marks}
   <g id="wheelDial" style="transform-origin:160px 160px;transform:rotate(${rotDeg||0}deg)">${texts}</g>
-  <line x1="160" y1="160" x2="208" y2="132" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/>
-  <line x1="160" y1="160" x2="125" y2="140" stroke="#f5d76e" stroke-width="6" stroke-linecap="round"/>
-  <circle cx="160" cy="160" r="34" fill="#c9a227"/><text x="160" y="157" text-anchor="middle" fill="#0b1f3a" font-size="11" font-weight="700">TIME</text><text x="160" y="171" text-anchor="middle" fill="#0b1f3a" font-size="11" font-weight="700">WHEEL</text>
+  <path d="M243.1,208 A96,96 0 1 1 92.1,92.1" fill="none" stroke="#c9a227" stroke-width="12" stroke-linecap="round"/>
+  <polygon points="81.7,86.1 104,87.4 94,104.8" fill="#c9a227"/>
+  <circle cx="160" cy="160" r="64" fill="#ffffff" stroke="#c9a227" stroke-width="3"/>
+  <circle cx="160" cy="160" r="60" fill="none" stroke="#0b1f3a" stroke-width="3"/>
+  ${clockTicks}
+  <line x1="160" y1="160" x2="134" y2="145" stroke="#0b1f3a" stroke-width="5" stroke-linecap="round"/>
+  <line x1="160" y1="160" x2="194.6" y2="140" stroke="#0b1f3a" stroke-width="4" stroke-linecap="round"/>
+  <circle cx="160" cy="160" r="5" fill="#c9a227"/>
+  <path d="M143,320 L177,320 L166,336 L177,352 L143,352 L154,336 Z" fill="none" stroke="#c9a227" stroke-width="3"/>
+  <path d="M147,350 L173,350 L160,338 Z" fill="#c9a227" opacity="0.9"/>
+  <path d="M147,322 L173,322 L160,332 Z" fill="#c9a227" opacity="0.45"/>
+  <line x1="141" y1="320" x2="179" y2="320" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="141" y1="352" x2="179" y2="352" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
   <polygon points="160,2 148,26 172,26" fill="#f5d76e" stroke="#c9a227" stroke-width="1"/></svg>`;
 }
 function wheelPanel(l){
