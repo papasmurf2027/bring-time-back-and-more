@@ -172,3 +172,7 @@ CREATE TABLE IF NOT EXISTS live_signals (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL, payload TEXT DEFAULT '', created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS room_presence (
+  listing_id TEXT NOT NULL, user_id TEXT NOT NULL, name TEXT NOT NULL, last_seen TEXT NOT NULL,
+  UNIQUE(listing_id, user_id)
+);

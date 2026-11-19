@@ -803,6 +803,7 @@ async function expireRefunds() {
 }
 // Auto-end timers + draw free drops, every second.
 let _lastAutoRelease = 0; // auto escrow release runs once a minute, not every sweep tick
+let _lastPresenceCleanup = 0; // stale room-presence rows are cleared once a minute
 async function sweep() {
   try {
     await expireRefunds();
@@ -837,6 +838,12 @@ async function sweep() {
       _lastAutoRelease = Date.now();
       const due = await query("SELECT * FROM listings WHERE escrow_status IN ('held_waiting_delivery','held_refund_window') AND delivered_at IS NOT NULL");
       for (const l of due) await tryReleaseEscrow(l);
+    }
+    // Watching count: drop room-presence rows nobody has refreshed in
+    // 5 minutes, so a closed tab stops counting without a goodbye.
+    if (Date.now() - _lastPresenceCleanup > 60000) {
+      _lastPresenceCleanup = Date.now();
+      await runQuery('DELETE FROM room_presence WHERE last_seen < $1', [new Date(Date.now() - 5 * 60000).toISOString()]);
     }
   } catch (e) { console.error('sweep', e.message); }
 }
@@ -893,7 +900,8 @@ app.get('/api/listings/:id', async (req, res) => {
   const refund = withReturnDates(refundRow);
   const _viewer = await _userFromSession(req);
   const _entered = _viewer && l.type === 'wheel' ? !!(await queryOne('SELECT * FROM wheel_entries WHERE listing_id=$1 AND user_id=$2', [l.id, _viewer.id])) : false;
-  res.json({ ..._stripWinnerAddress(l, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_entries: wheelEntries.map(e => ({ name: e.name })), wheel_count: wheelEntries.length, wheel_entered: _entered, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
+  const watching = await watchingCount(l);
+  res.json({ ..._stripWinnerAddress(l, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_entries: wheelEntries.map(e => ({ name: e.name })), wheel_count: wheelEntries.length, wheel_entered: _entered, watching, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -1353,6 +1361,16 @@ app.post('/api/listings/:id/go-live', async (req, res) => {
   if (!await requireSellerFor(req, res, l)) return;
   const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   await query('UPDATE listings SET seller_live=1, seller_live_at=$1 WHERE id=$2', [nowISO(), l.id]);
+  // The Time Wheel is the seller's own FREE giveaway — the site has nothing
+  // to do with it. When the seller goes live on a wheel listing that is
+  // still open, offer it in that room's chat, from the seller, once.
+  if (l.type === 'wheel' && l.status === 'live') {
+    const already = await queryOne('SELECT id FROM chats WHERE listing_id=$1 AND message LIKE $2', [l.id, '⏰ FREE giveaway —%']);
+    if (!already) {
+      await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
+        [uid(), l.id, l.seller, `⏰ FREE giveaway — ${l.title}! Enter free and your name goes on the Time Wheel. No payment, no bidding. The winner gets this item free.`, nowISO()]);
+    }
+  }
   res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/end-live', async (req, res) => {
@@ -1363,6 +1381,29 @@ app.post('/api/listings/:id/end-live', async (req, res) => {
   await query('UPDATE listings SET seller_live=0 WHERE id=$1', [req.params.id]);
   res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
+// ---------- Watching count (Kevin, 2026-11-19) ----------
+// The seller sees how many people are in their room right now, in the
+// site's own gold + dark navy design — not a copy of any other site.
+// Every signed-in person with the room open checks in every 15 seconds;
+// anyone not seen for 60 seconds drops off the count, and the seller
+// themself is never counted.
+app.post('/api/listings/:id/presence', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  await runQuery('DELETE FROM room_presence WHERE listing_id=$1 AND user_id=$2', [l.id, u.id]);
+  if (!((req.body || {}).leave)) {
+    await query('INSERT INTO room_presence(listing_id,user_id,name,last_seen) VALUES($1,$2,$3,$4)',
+      [l.id, u.id, u.name.slice(0, 100), nowISO()]);
+  }
+  res.json({ ok: true });
+});
+async function watchingCount(l) {
+  const since = new Date(Date.now() - 60000).toISOString();
+  const row = await queryOne('SELECT COUNT(*) AS c FROM room_presence WHERE listing_id=$1 AND last_seen>=$2 AND user_id<>$3 AND name<>$4',
+    [l.id, since, l.seller_user_id || '', l.seller]);
+  return row ? Number(row.c || 0) : 0;
+}
 // ---------- Live video signalling (WebRTC, peer-to-peer, no paid service) ----------
 // Signals carry SDP offers/answers and ICE candidates between the seller and each
 // viewer in one auction room. Payloads are opaque JSON strings; nothing is recorded.
