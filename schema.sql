@@ -10,6 +10,7 @@ CREATE TABLE IF NOT EXISTS listings (
   start_price REAL DEFAULT 0, current_bid REAL DEFAULT 0, fixed_price REAL,
   shipping REAL DEFAULT 0, shipping_insured INTEGER DEFAULT 0, carrier TEXT DEFAULT '',
   authenticity TEXT DEFAULT 'Authentic', timer_seconds INTEGER DEFAULT 30, mode TEXT DEFAULT 'Regular',
+  condition TEXT DEFAULT '',
   status TEXT DEFAULT 'live', created_at TEXT NOT NULL, ends_at TEXT,
   winner TEXT, payment_status TEXT DEFAULT 'none', payment_method TEXT, payment_last4 TEXT, payment_reason TEXT,
   escrow_status TEXT DEFAULT 'not_started', escrow_amount REAL DEFAULT 0,

@@ -123,6 +123,7 @@ async function init() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   for (const st of schema.split(';')) { const t = st.trim(); if (t) { try { await query(t); } catch (e) { /* table may exist */ } } }
   try { await query('ALTER TABLE listings ADD COLUMN image_url TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN condition TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN package_size TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN shipped_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE listings ADD COLUMN wheel_landed_item TEXT'); } catch (e) { /* column already exists */ }
@@ -364,13 +365,13 @@ app.get('/api/listings/:id/qr', async (req, res) => {
 // The seller then types the actual item ("What they won") on the sold item
 // page — that revealed item is saved on the listing and shown on the winner
 // receipt, the video receipt record and the ship-QR section.
-async function insertListing(b, title, description, type, wheelItems, shipAmt, sizePrice, auth, timer, isRandom) {
+async function insertListing(b, title, description, type, wheelItems, shipAmt, sizePrice, auth, timer, isRandom, cond) {
   const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
   const id = uid();
   const img = isRandom ? '' : (typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '');
-  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,'live',$15,$16,$17,$18,$19)`,
-    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0]);
+  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20)`,
+    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0]);
   for (let i = 0; i < wheelItems.length; i++) {
     await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
       [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
@@ -398,6 +399,11 @@ app.post('/api/listings', async (req, res) => {
   if (!shipAmt && shipAmt !== 0) return res.json({ ok: false, error: 'pick a package size — buyers pay shipping by size' });
   if (!b.shippingInsured) return res.json({ ok: false, error: 'insured shipping is required' });
   const auth = b.authenticity || 'Authentic';
+  // Condition (Kevin, 2026-11-18): required on every listing — auctions,
+  // Store and Random Items. No valid condition = no listing.
+  const CONDITIONS = ['New', 'Used – Working', 'Used – Working Project', 'Used – Not Working / Project / For Parts'];
+  const cond = b.condition;
+  if (!CONDITIONS.includes(cond)) return res.json({ ok: false, error: 'pick a condition — New, Used – Working, Used – Working Project, or Used – Not Working / Project / For Parts' });
   const timer = Math.min(3600, Math.max(5, parseInt(b.timerSeconds || 30, 10) || 30));
   if (isRandom) {
     // One tap creates N separate auctions: "Random Item 1", "Random Item 2", …
@@ -411,7 +417,7 @@ app.post('/api/listings', async (req, res) => {
     const ids = [], titles = [];
     for (let i = 1; i <= count; i++) {
       const title = base + ' ' + i;
-      const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, auth, timer, true);
+      const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, auth, timer, true, cond);
       ids.push(id); titles.push(title);
     }
     return res.json({ ok: true, ids, titles, count, isRandom: true });
@@ -428,7 +434,7 @@ app.post('/api/listings', async (req, res) => {
   if (wheelItems.some(w => adHit(w.name))) return res.json({ ok: false, error: AD_ERROR });
   if (type === 'wheel' && !wheelItems.length) return res.json({ ok: false, error: 'a Time Wheel needs at least 1 item on it (up to 100) — one per line' });
   if (wheelItems.length > 100) return res.json({ ok: false, error: 'a Time Wheel holds at most 100 items' });
-  const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false);
+  const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false, cond);
   res.json({ ok: true, id, wheelCount: wheelItems.length });
 });
 // Seller records what the winner actually won on a random item — the item
