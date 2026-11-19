@@ -110,9 +110,19 @@ CREATE TABLE IF NOT EXISTS live_notice (
 -- Time Wheel: items loaded on a wheel listing (up to 100). The winner pays the
 -- winning bid + shipping, the wheel spins and lands on ONE item — that item is
 -- what they get. No spots to buy, no paying to spin, no extra prize or charge.
+-- KEPT for old listings only. Since 2026-11-19 the wheel is a FREE giveaway:
+-- people's names go on the wheel (wheel_entries below), nobody pays, and the
+-- winner gets the listed item free.
 CREATE TABLE IF NOT EXISTS wheel_items (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, name TEXT NOT NULL,
   photo_url TEXT DEFAULT '', position INTEGER DEFAULT 0, created_at TEXT NOT NULL
+);
+-- Time Wheel giveaway entries (Kevin, 2026-11-19): one row per person who
+-- enters free. Their account name goes on the wheel. One entry per person
+-- per wheel (enforced by the enter endpoint, by account id).
+CREATE TABLE IF NOT EXISTS wheel_entries (
+  id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, name TEXT NOT NULL,
+  user_id TEXT DEFAULT '', created_at TEXT NOT NULL
 );
 -- Seller tokens (2026-11-19): one row per seller, SHA-256 hash only — the
 -- plain token is never stored. Issued the first time a seller lists or

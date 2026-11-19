@@ -634,36 +634,36 @@ app.post('/api/auth/owner-reset', async (req, res) => {
   return res.json({ ok: true, message: 'reset code ready for Kevin to pass on', ..._resetTokenForResponse(token) });
 });
 
-// ---------- Time Wheel ----------
-// A Time Wheel listing is an auction whose prize is picked by the wheel: the
-// seller loads up to 100 items, buyers see them all before bidding, the winner
-// pays the winning bid + shipping, and the wheel lands on ONE item — that item
-// is what they get. No spots to buy, no paying to spin, no extra prize/charge.
-function parseWheelItems(b) {
-  let raw = b.wheelItems;
-  if (typeof raw === 'string') raw = raw.split(/\n/);
-  if (!Array.isArray(raw)) return [];
-  const items = [];
-  for (const it of raw) {
-    const name = typeof it === 'string' ? it.trim() : String((it && it.name) || '').trim();
-    const _ph = typeof it === 'object' && it ? String(it.photoUrl || it.photo_url || '') : '';
-    const photo = _safeImageUrl(_ph) === null ? '' : (_safeImageUrl(_ph) || '');
-    if (name) items.push({ name: name.slice(0, 120), photoUrl: photo });
-  }
-  return items;
+// ---------- Time Wheel — FREE giveaway (Kevin, 2026-11-19) ----------
+// The wheel is for FREE giveaways only. People enter free and their NAMES go
+// on the wheel — nobody pays, nobody buys a spot, nobody pays to spin. The
+// seller sets how long entries stay open (the listing timer). The wheel spins
+// automatically when entries close, or when the seller spins it by hand. The
+// winner gets the listed item FREE, is told they won, and the seller gets
+// their shipping address and a shipping label, same as a win.
+async function wheelEntriesFor(listingId) {
+  return query('SELECT * FROM wheel_entries WHERE listing_id=$1 ORDER BY created_at ASC', [listingId]);
 }
-async function wheelItemsFor(listingId) {
-  return query('SELECT * FROM wheel_items WHERE listing_id=$1 ORDER BY position ASC', [listingId]);
-}
+// Spin the wheel: pick ONE entrant at random. The winner gets the item free.
+// Sets the winner + their shipping address (snapshot, same lock as a win),
+// a shipping label record, and announces it in chat. Lands only once.
 async function spinWheelFor(l) {
-  const items = await wheelItemsFor(l.id);
-  if (!items.length) return null;
-  const idx = crypto.randomInt(0, items.length);
-  const landed = items[idx];
-  await query('UPDATE listings SET wheel_landed_item=$1, wheel_landed_at=$2, wheel_spun=1 WHERE id=$3', [landed.name, nowISO(), l.id]);
+  const entries = await wheelEntriesFor(l.id);
+  if (!entries.length) return null;
+  const idx = crypto.randomInt(0, entries.length);
+  const landed = entries[idx];
+  const winnerUser = landed.user_id ? await queryOne('SELECT * FROM users WHERE id=$1', [landed.user_id]) : null;
+  const winnerAddress = winnerUser ? (winnerUser.shipping_address || '') : '';
+  const carrier = l.carrier || carrierFor(l.package_size);
+  const tracking = l.tracking || makeTracking(carrier);
+  await query('UPDATE listings SET wheel_landed_item=$1, wheel_landed_at=$2, wheel_spun=1, status=$3, winner=$4, winner_user_id=$5, winner_address=$6, payment_status=$7, tracking=$8, carrier=$9 WHERE id=$10',
+    [landed.name, nowISO(), 'sold', landed.name, landed.user_id || null, winnerAddress, 'free', tracking, carrier, l.id]);
+  const exLabel = await queryOne('SELECT * FROM labels WHERE listing_id=$1', [l.id]);
+  if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+    [uid(), l.id, carrier, tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-    [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — that is the item ${l.winner} gets. No extra prize, no extra charge.`, nowISO()]);
-  return { landedItem: landed.name, landedIndex: idx, totalItems: items.length };
+    [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — they win ${l.title} FREE. No payment, no extra charge.`, nowISO()]);
+  return { landedName: landed.name, landedIndex: idx, totalEntries: entries.length, winnerAddress, tracking, carrier };
 }
 // ---------- Seller-choice return rule (Kevin, 2026-11-18) ----------
 // When a buyer asks for a refund, it is UP TO THE SELLER what happens next:
@@ -767,6 +767,15 @@ async function sweep() {
     const live = await query("SELECT * FROM listings WHERE status='live' AND type IN ('auction','wheel')");
     for (const l of live) {
       if (l.ends_at && new Date(l.ends_at) <= new Date()) {
+        if (l.type === 'wheel') {
+          // Time Wheel (free giveaway): entries close when the timer ends and
+          // the wheel spins itself. No entries = it just ends, no winner.
+          if (!l.wheel_spun) {
+            const spun = await spinWheelFor(l);
+            if (!spun) await query("UPDATE listings SET status='ended' WHERE id=$1", [l.id]);
+          }
+          continue;
+        }
         const top = await queryOne('SELECT * FROM bids WHERE listing_id=$1 ORDER BY amount DESC, created_at ASC LIMIT 1', [l.id]);
         if (top) await query("UPDATE listings SET status='ended', winner=$1, winner_user_id=$2, payment_status='awaiting_payment', escrow_status='not_started', escrow_amount=0 WHERE id=$3", [top.bidder, top.bidder_user_id || null, l.id]);
         else await query("UPDATE listings SET status='ended' WHERE id=$1", [l.id]);
@@ -799,7 +808,7 @@ async function hideSuspended(rows) {
 }
 async function attachWheelCounts(rows) {
   if (!rows.length) return rows;
-  const counts = await query('SELECT listing_id, COUNT(*) AS n FROM wheel_items GROUP BY listing_id');
+  const counts = await query('SELECT listing_id, COUNT(*) AS n FROM wheel_entries GROUP BY listing_id');
   const map = {};
   for (const c of counts) map[c.listing_id] = Number(c.n);
   return rows.map(l => ({ ...l, wheel_count: map[l.id] || 0 }));
@@ -827,12 +836,13 @@ app.get('/api/listings/:id', async (req, res) => {
   const reviews = await query('SELECT * FROM reviews WHERE listing_id=$1 ORDER BY created_at DESC', [l.id]);
   const receipt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   const qr = await qrForListing(l);
-  const wheelItems = l.type === 'wheel' ? await wheelItemsFor(l.id) : [];
+  const wheelEntries = l.type === 'wheel' ? await wheelEntriesFor(l.id) : [];
   const payout = await payoutFor(l);
   const refundRow = await queryOne('SELECT * FROM refunds WHERE listing_id=$1 ORDER BY created_at DESC LIMIT 1', [l.id]);
   const refund = withReturnDates(refundRow);
   const _viewer = await _userFromSession(req);
-  res.json({ ..._stripWinnerAddress(l, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_items: wheelItems, wheel_count: wheelItems.length, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
+  const _entered = _viewer && l.type === 'wheel' ? !!(await queryOne('SELECT * FROM wheel_entries WHERE listing_id=$1 AND user_id=$2', [l.id, _viewer.id])) : false;
+  res.json({ ..._stripWinnerAddress(l, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_entries: wheelEntries.map(e => ({ name: e.name })), wheel_count: wheelEntries.length, wheel_entered: _entered, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -933,22 +943,13 @@ app.post('/api/listings', async (req, res) => {
   if (auth === 'Authentic' && /replica|not real|fake/.test(text)) return res.json({ ok: false, error: 'an Authentic listing cannot describe itself as a replica' });
   if ((auth === 'Replica' || auth === 'Unbranded') && !/replica|unbranded|no-name|no name|inspired/.test(text)) return res.json({ ok: false, error: 'replica / unbranded items must say so in the title or description' });
   const type = b.type === 'buy_now' ? 'buy_now' : (b.type === 'wheel' ? 'wheel' : 'auction');
-  // A Time Wheel needs the items loaded on it: 1 to 100, each a short name.
-  const wheelItems = type === 'wheel' ? parseWheelItems(b) : [];
-  // M8 fix (2026-11-19): wheel item names get the same banned-item and
-  // advertising checks as listing titles — a banned item cannot hide on
-  // the wheel.
-  for (const it of wheelItems) {
-    const badWheel = bannedHit(it.name);
-    if (badWheel) return res.json({ ok: false, error: 'banned item on the wheel: ' + badWheel });
-    if (adHit(it.name)) return res.json({ ok: false, error: AD_ERROR });
-  }
-  if (wheelItems.some(w => adHit(w.name))) return res.json({ ok: false, error: AD_ERROR });
-  if (type === 'wheel' && !wheelItems.length) return res.json({ ok: false, error: 'a Time Wheel needs at least 1 item on it (up to 100) — one per line' });
-  if (wheelItems.length > 100) return res.json({ ok: false, error: 'a Time Wheel holds at most 100 items' });
-  const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false, cond);
+  // A Time Wheel is a FREE giveaway — no items to load, no bidding, no price.
+  // People enter free and their names go on the wheel. The timer is how long
+  // entries stay open. Starting bid is always $0 on a wheel.
+  if (type === 'wheel') b.startPrice = 0;
+  const id = await insertListing(b, b.title, b.description || '', type, [], shipAmt, sizePrice, auth, timer, false, cond);
   const _st = await ensureSellerToken(b.seller, b.sellerUserId);
-  res.json({ ok: true, id, wheelCount: wheelItems.length, ...(_st ? { sellerToken: _st } : {}) });
+  res.json({ ok: true, id, ...(_st ? { sellerToken: _st } : {}) });
 });
 // Seller records what the winner actually won on a random item — the item
 // they held up live on camera. Seller-only, only after the item is won and
@@ -974,6 +975,8 @@ app.post('/api/listings/:id/bid', async (req, res) => {
   if (_needsAddress(u)) return res.json({ ok: false, error: ADDRESS_REQUIRED_ERROR });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
+  // Time Wheel is a FREE giveaway — no bidding. Enter free instead.
+  if (l.type === 'wheel') return res.json({ ok: false, error: 'this is a free Time Wheel giveaway — enter free, no bidding' });
   // Sellers cannot bid on their own auctions (2026-11-19 fix): no shill bidding.
   if (_sellerMatches(req, l)) return res.json({ ok: false, error: 'you cannot bid on your own listing' });
   if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'this is a Store listing — Buy Now only, no bidding' });
@@ -1037,29 +1040,39 @@ async function completeSale(l, buyer, method, detail, winnerAddress, winnerUserI
   const exRcpt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   if (!exRcpt) await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [uid(), l.id, receiptNo, l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0), l.shipping || 0, total, nowISO()]);
-  // Time Wheel: payment validated → the wheel spins now and lands on ONE item.
-  // That landed item is what the winner gets — no extra prize, no extra charge.
-  let landed = null;
-  if (l.type === 'wheel') landed = await spinWheelFor({ ...l, winner: buyer });
-  return { ok: true, total, receiptNo, landedItem: landed ? landed.landedItem : null };
+  return { ok: true, total, receiptNo };
 }
-// Spin the Time Wheel (fallback if payment validated but the wheel has not
-// spun yet — completeSale spins it automatically). Only the seller or the
-// winner can spin it, and it can only land once: a second spin returns the
-// item it already landed on.
+// Enter the Time Wheel giveaway — FREE. One entry per person, by account.
+// Entries are open while the wheel is live and its timer has not run out.
+// The person's account name is what goes on the wheel.
+app.post('/api/listings/:id/enter', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l || l.type !== 'wheel') return res.json({ ok: false, error: 'not a Time Wheel giveaway' });
+  if (l.status !== 'live') return res.json({ ok: false, error: 'entries are closed — this giveaway is over' });
+  if (l.ends_at && new Date(l.ends_at) <= new Date()) return res.json({ ok: false, error: 'entries are closed — the timer ran out' });
+  if (l.wheel_spun) return res.json({ ok: false, error: 'the wheel has already spun' });
+  if (_needsAddress(u)) return res.json({ ok: false, error: ADDRESS_REQUIRED_ERROR });
+  const ex = await queryOne('SELECT * FROM wheel_entries WHERE listing_id=$1 AND user_id=$2', [l.id, u.id]);
+  if (ex) return res.json({ ok: false, error: 'you are already on the wheel — one entry per person' });
+  await query('INSERT INTO wheel_entries(id,listing_id,name,user_id,created_at) VALUES($1,$2,$3,$4,$5)', [uid(), l.id, u.name, u.id, nowISO()]);
+  const count = (await query('SELECT COUNT(*) AS n FROM wheel_entries WHERE listing_id=$1', [l.id]))[0];
+  res.json({ ok: true, entries: Number(count ? count.n : 1) });
+});
+// Spin the Time Wheel by hand — seller only. Entries must still be open or
+// just closed, and it can only land once: a second spin returns the name it
+// already landed on. If the timer runs out first, the sweep spins it.
 app.post('/api/listings/:id/spin', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (l.type !== 'wheel') return res.json({ ok: false, error: 'this is not a Time Wheel listing' });
-  if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the wheel spins only after the winner pays' });
-  if (l.wheel_spun && l.wheel_landed_item) return res.json({ ok: true, alreadySpun: true, landedItem: l.wheel_landed_item, landedAt: l.wheel_landed_at });
+  if (l.wheel_spun && l.wheel_landed_item) return res.json({ ok: true, alreadySpun: true, landedName: l.wheel_landed_item, landedAt: l.wheel_landed_at });
+  if (l.status !== 'live' && l.status !== 'ended') return res.json({ ok: false, error: 'this giveaway is over' });
   const u = await requireAuth(req, res); if (!u) return;
-  const who = u.name;
-  if (who !== l.seller && who !== l.winner) return res.json({ ok: false, error: 'only the seller or the winner can spin the Time Wheel' });
-  let _tok = null;
-  if (who === l.seller) { _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return; }
+  if (!_sellerMatches(req, l)) return res.json({ ok: false, error: 'only the seller can spin the Time Wheel' });
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   const landed = await spinWheelFor(l);
-  if (!landed) return res.json({ ok: false, error: 'no items on the wheel' });
+  if (!landed) return res.json({ ok: false, error: 'no names on the wheel yet — nobody has entered' });
   res.json({ ok: true, ...landed, ...(_tok && _tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/buy-now', async (req, res) => {
@@ -1099,6 +1112,7 @@ app.post('/api/listings/:id/rerun', async (req, res) => {
   const created = new Date(); const ends = new Date(created.getTime() + (l.timer_seconds || 30) * 1000);
   await query('DELETE FROM bids WHERE listing_id=$1', [l.id]);
   await query('DELETE FROM top_limits WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM wheel_entries WHERE listing_id=$1', [l.id]);
   await query(`UPDATE listings SET status='live', winner=NULL, winner_user_id=NULL, payment_status='none', payment_reason='', escrow_status='not_started', escrow_amount=0,
     current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL, shipped_at=NULL, wheel_landed_item='', wheel_landed_at=NULL, wheel_spun=0, revealed_item='', revealed_at=NULL WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
   res.json({ ok: true, endsAt: ends.toISOString(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
@@ -1112,7 +1126,7 @@ app.post('/api/listings/:id/mark-shipped', async (req, res) => {
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (!await requireSellerFor(req, res, l)) return;
   const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
-  if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until the item is sold and payment validates' });
+  if (l.status !== 'sold' || (l.payment_status !== 'validated' && l.payment_status !== 'free')) return res.json({ ok: false, error: 'cannot ship until the item is sold' });
   if (l.shipped_at) return res.json({ ok: false, error: 'already marked as shipped' });
   const carrier = l.carrier || carrierFor(l.package_size);
   const tracking = l.tracking || makeTracking(carrier);
@@ -1365,7 +1379,7 @@ app.post('/api/top-limit', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.body.listingId]);
   if (!l) return res.json({ ok: false, error: 'listing not found' });
   if (l.status !== 'live') return res.json({ ok: false, error: 'this auction is not live any more' });
-  if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'My Top Limit is for auctions only' });
+  if (l.type !== 'auction') return res.json({ ok: false, error: 'My Top Limit is for auctions only' });
   if (_sellerMatches(req, l)) return res.json({ ok: false, error: 'you cannot set a Top Limit on your own listing' });
   const max = Number(req.body.maxAmount);
   if (!max || !isFinite(max) || max <= 0) return res.json({ ok: false, error: 'pick a top limit above $0' });
