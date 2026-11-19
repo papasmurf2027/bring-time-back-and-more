@@ -11,6 +11,7 @@ async function load(){
   document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h3>${l.title} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${l.authenticity.toUpperCase()}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${l.category} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel • '+l.mode:'Auction • '+l.mode} • ${l.seller}${l.type==='wheel'?` • ${l.wheel_count||0} items on the wheel`:''}</p>
+  <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">Status: ${l.status} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
@@ -18,6 +19,13 @@ async function load(){
   const s=await j('/api/coming-up'); document.getElementById('shows').innerHTML=s.map(x=>`<p>Coming Up: ${x.title} by ${x.seller} — ${x.starts_at}</p>`).join('');
 }
 function setCat(c){curCat=c;load();}
+// Condition (Kevin, 2026-11-18): the seller must state it — New, Used –
+// Working, Used – Working Project, or Used – Not Working / Project / For
+// Parts. Old listings made before this rule have no condition stored; the
+// display fallback below ('Used – Working') is display-only and never
+// changes a seller's stated condition in the database.
+const CONDITIONS=['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts'];
+function conditionOf(l){return CONDITIONS.includes(l&&l.condition)?l.condition:'Used – Working';}
 // Shipping by package size (same tiers as the server — US shipping rates).
 const SHIP_SIZES={small:{label:'Small — under 4 oz',price:4.47},medium:{label:'Medium — 4–8 oz',price:4.85},large:{label:'Large — 8–12 oz',price:5.25},xl:{label:'XL — 12 oz–1 lb',price:6.75},box:{label:'Box — 1–5 lb',price:7.75},bigbox:{label:'Big box — over 5 lb',price:9.69},flat:{label:'Flat Rate box',price:12.99},envelope:{label:'Card envelope',price:0.99}};
 function shipLabelOf(s){return (SHIP_SIZES[s]||{}).label||'';}
@@ -207,7 +215,7 @@ function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const
 async function createListing(){
   const size=document.getElementById('sSize').value;
   const wheelItems=(document.getElementById('sWheel').value||'').split('\n').map(s=>s.trim()).filter(Boolean);
-  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||'',wheelItems};
+  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
 // Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
@@ -216,7 +224,7 @@ async function createListing(){
 // insured shipping and Seller Agreement as the sell form above.
 async function createRandomItems(){
   const size=document.getElementById('sSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked};
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:document.getElementById('sTimer').value,mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked};
   const r=await j('/api/listings',b);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${r.titles.join(', ')} — no picture, show each one live on camera.` : ('Error: '+r.error);
   if(r.ok)load();
@@ -357,7 +365,7 @@ async function openItem(id){
   liveListingId=id;
   const l=await j('/api/listings/'+id);
   const el=document.getElementById('detail'); el.scrollIntoView();
-  el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2>${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${l.description||''} • ${l.category} • ${l.authenticity} • Seller: ${l.seller}</p>
+  el.innerHTML=`<div class="card">${l.image_url?`<img src="${l.image_url}" style="max-width:100%;border-radius:10px" alt="${l.title}">`:''}<h2>${l.title}</h2>${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${l.description||''} • ${l.category} • ${l.authenticity} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${l.seller}</p>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${(l.type==='auction'||l.type==='wheel')?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
