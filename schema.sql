@@ -11,8 +11,9 @@ CREATE TABLE IF NOT EXISTS listings (
   shipping REAL DEFAULT 0, shipping_insured INTEGER DEFAULT 0, carrier TEXT DEFAULT '',
   authenticity TEXT DEFAULT 'Authentic', timer_seconds INTEGER DEFAULT 30, mode TEXT DEFAULT 'Regular',
   condition TEXT DEFAULT '',
+  no_change_of_mind INTEGER DEFAULT 0,
   status TEXT DEFAULT 'live', created_at TEXT NOT NULL, ends_at TEXT,
-  winner TEXT, payment_status TEXT DEFAULT 'none', payment_method TEXT, payment_last4 TEXT, payment_reason TEXT,
+  winner TEXT, winner_address TEXT DEFAULT '', payment_status TEXT DEFAULT 'none', payment_method TEXT, payment_last4 TEXT, payment_reason TEXT,
   escrow_status TEXT DEFAULT 'not_started', escrow_amount REAL DEFAULT 0,
   tracking TEXT, delivered INTEGER DEFAULT 0, delivered_at TEXT, seller_live INTEGER DEFAULT 0, seller_live_at TEXT,
   buy_now_offer REAL, buy_now_offer_by TEXT, image_url TEXT DEFAULT '',
@@ -38,7 +39,10 @@ CREATE TABLE IF NOT EXISTS shows (id TEXT PRIMARY KEY, seller TEXT NOT NULL, tit
 -- Resend key set yet so the joiner is stored and still to be welcomed, and the
 -- launch email still covers them), or 'failed' (Resend was tried and refused it).
 -- welcome_sent_at records when a welcome email actually went out.
-CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, role TEXT DEFAULT 'buyer', founding INTEGER DEFAULT 0, created_at TEXT NOT NULL, welcome_email_status TEXT DEFAULT 'pending', welcome_sent_at TEXT);
+-- Waitlist confirmation (2026-11-19 fix): a welcome email is only sent
+-- to an address the joiner confirmed. confirmed is 0 until they confirm
+-- with the code emailed to them, or the owner confirms them
+CREATE TABLE IF NOT EXISTS waitlist (id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL, role TEXT DEFAULT 'buyer', founding INTEGER DEFAULT 0, created_at TEXT NOT NULL, welcome_email_status TEXT DEFAULT 'pending', welcome_sent_at TEXT, confirmed INTEGER DEFAULT 0, confirm_token_hash TEXT DEFAULT '');
 CREATE TABLE IF NOT EXISTS founding (id TEXT PRIMARY KEY, seller TEXT NOT NULL, claimed_at TEXT NOT NULL);
 -- Refund return rule (Kevin, 2026-11-18): when a refund is asked, it is UP TO
 -- THE SELLER what happens next. return_choice is '' until the seller decides,
@@ -120,10 +124,15 @@ CREATE TABLE IF NOT EXISTS wheel_items (
 -- tokens are stored as SHA-256 hashes only. Sessions expire after 30 days
 -- and reset tokens after 1 hour. email_verified starts at 0. In test mode
 -- bidding is allowed anyway (pre-launch, no real money).
+-- Security question (Kevin, 2026-11-19): every account sets a question
+-- only they know the answer to, and the answer is required to reset the
+-- password. The answer is stored as a scrypt hash with its own salt, the
+-- same way as passwords. It is never stored plain and never returned
 CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT DEFAULT 'buyer',
-  email_verified INTEGER DEFAULT 0, created_at TEXT NOT NULL
+  email_verified INTEGER DEFAULT 0, shipping_address TEXT DEFAULT '', created_at TEXT NOT NULL,
+  security_question TEXT DEFAULT '', security_answer_hash TEXT DEFAULT '', security_answer_salt TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
@@ -136,6 +145,10 @@ CREATE TABLE IF NOT EXISTS password_resets (
 CREATE TABLE IF NOT EXISTS seller_tokens (
   id TEXT PRIMARY KEY, seller TEXT NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL
 );
+-- One open refund per sale (2026-11-19 fix): the database itself refuses
+-- a second open refund for the same sale, so two requests at the same
+-- moment cannot both get through
+CREATE UNIQUE INDEX IF NOT EXISTS idx_refunds_one_open ON refunds(listing_id) WHERE status IN ('pending','awaiting_return','disputed');
 CREATE TABLE IF NOT EXISTS live_signals (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL DEFAULT '',
   kind TEXT NOT NULL, payload TEXT DEFAULT '', created_at TEXT NOT NULL
