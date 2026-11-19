@@ -469,10 +469,51 @@ async function _sendAccountEmail(email, subject, text) {
 function _resetTokenForResponse(token) {
   return { resetToken: token, testOnly: 'owner only — this reset code is shown to Kevin so he can pass it on. It expires in 1 hour.' };
 }
+// ---------- No fake / bot accounts (Kevin, 2026-11-19) ----------
+// Free checks, no paid service. A script making fake accounts in bulk hits
+// all three: (1) a honeypot field real people never fill, (2) throwaway
+// email addresses are refused, (3) a simple sum only a person reading the
+// page can answer. One determined person making one account by hand can
+// still get through — nothing free stops that — but mass fake accounts do
+// not. Sellers face the real gate at go-live: Stripe ID verification
+// before any payout.
+const DISPOSABLE_EMAIL_DOMAINS = ['mailinator.com', 'tempmail.com', '10minutemail.com', 'guerrillamail.com', 'sharklasers.com', 'yopmail.com', 'temp-mail.org', 'maildrop.cc', 'getnada.com', 'mohmal.com', 'throwawaymail.com', 'fakeinbox.com', 'trashmail.com', 'dispostable.com', 'mailnesia.com', 'mintemail.com', 'spamgourmet.com', 'mytemp.email', 'tempail.com', 'emailondeck.com', 'harakirimail.com', 'inboxbear.com', 'tmail.com', 'tempinbox.com', 'mailcatch.com'];
+const _signupChallenges = new Map(); // id -> {answer, expires}; one use only
+const _signupRate = new Map(); // ip -> {start, count}; 5 sign-ups per hour
+function _signupRateOk(ip) {
+  const now = Date.now();
+  let b = _signupRate.get(ip);
+  if (!b || now - b.start > 3600000) { b = { start: now, count: 0 }; _signupRate.set(ip, b); }
+  b.count++;
+  return b.count <= 5;
+}
+// Human check for signup: a simple sum. The answer lives on the server
+// for 10 minutes and is used once — a script posting straight at the
+// signup endpoint has no answer to send.
+app.get('/api/auth/challenge', async (req, res) => {
+  const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8);
+  const id = uid();
+  _signupChallenges.set(id, { answer: a + b, expires: Date.now() + 10 * 60 * 1000 });
+  if (_signupChallenges.size > 500) { for (const [k, v] of _signupChallenges) if (v.expires < Date.now()) _signupChallenges.delete(k); }
+  res.json({ ok: true, id, question: `What is ${a} + ${b}?` });
+});
 app.post('/api/auth/signup', async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 100);
   const email = String(b.email || '').trim().toLowerCase();
+  // Bulk fake accounts: at most 5 sign-ups per hour from one connection.
+  if (!_signupRateOk(req.ip || '')) return res.json({ ok: false, error: 'too many sign-ups from this connection — try again later' });
+  // Honeypot: a hidden field real people never fill. A bot filling every
+  // field trips it. The error stays vague on purpose.
+  if (String(b.website || b.url || '').trim()) return res.json({ ok: false, error: 'sign up failed — please try again' });
+  const _domain = (email.split('@')[1] || '').toLowerCase();
+  if (DISPOSABLE_EMAIL_DOMAINS.includes(_domain)) return res.json({ ok: false, error: 'use a real email address — temporary email addresses cannot sign up' });
+  // Human check: the challenge id + answer must match the server's record.
+  // The challenge is used once, right or wrong, so answers cannot be guessed
+  // against the same question over and over.
+  const _ch = _signupChallenges.get(String(b.challengeId || ''));
+  _signupChallenges.delete(String(b.challengeId || ''));
+  if (!_ch || _ch.expires < Date.now() || Number(b.challengeAnswer) !== _ch.answer) return res.json({ ok: false, error: 'answer the check question to sign up — it proves you are a person, not a script' });
   const password = String(b.password || '');
   const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
   const shippingAddress = String(b.shippingAddress || b.address || '').trim().slice(0, 500);
@@ -1182,8 +1223,11 @@ async function incorrectClaimsCount(seller) {
 // suspended for 7 days, 2nd = 30 days, 3rd = selling privileges removed for
 // good. While suspended the seller's live listings are hidden and they
 // cannot list new items. Strikes are counted in total, not per period.
-async function sellerStatus(seller) {
-  const rows = await query('SELECT * FROM incorrect_claims WHERE seller=$1 ORDER BY created_at ASC', [seller]);
+// One ladder: 1 strike = selling suspended 7 days, 2 = 30 days, 3 or more =
+// selling privileges removed for good. Used for incorrect return claims AND
+// for confirmed bad listings (each ladder is counted separately — a strike
+// on one ladder does not count toward the other).
+function _ladder(rows) {
   const strikes = rows.length;
   if (strikes >= 3) return { strikes, banned: true, suspendedUntil: null, suspensionDays: 0, canSell: false };
   if (strikes >= 1) {
@@ -1193,6 +1237,20 @@ async function sellerStatus(seller) {
     return { strikes, banned: false, suspendedUntil, suspensionDays: days, canSell: new Date() >= new Date(suspendedUntil) };
   }
   return { strikes: 0, banned: false, suspendedUntil: null, suspensionDays: 0, canSell: true };
+}
+async function sellerStatus(seller) {
+  const claimRows = await query('SELECT * FROM incorrect_claims WHERE seller=$1 ORDER BY created_at ASC', [seller]);
+  const badRows = await query('SELECT * FROM bad_listing_strikes WHERE seller=$1 ORDER BY created_at ASC', [seller]);
+  const a = _ladder(claimRows), b = _ladder(badRows);
+  const banned = a.banned || b.banned;
+  // Suspended until the later of the two active suspensions, if either.
+  let suspendedUntil = null, suspensionDays = 0;
+  for (const x of [a, b]) if (x.suspendedUntil && !x.banned) {
+    if (!suspendedUntil || new Date(x.suspendedUntil) > new Date(suspendedUntil)) { suspendedUntil = x.suspendedUntil; suspensionDays = x.suspensionDays; }
+  }
+  return { strikes: a.strikes, banned, suspendedUntil, suspensionDays, canSell: !banned && a.canSell && b.canSell,
+    claimSuspensionDays: a.suspensionDays, badListingStrikes: b.strikes, badListingBanned: b.banned,
+    badListingSuspendedUntil: b.suspendedUntil, badListingSuspensionDays: b.suspensionDays };
 }
 async function sellerTier(seller) {
   const clean = await cleanSalesCount(seller);
@@ -1212,7 +1270,7 @@ async function sellerTier(seller) {
   const nextTier = tier === 'New' ? 'Trusted' : tier === 'Trusted' ? 'Top' : null;
   const salesToNext = tier === 'New' ? Math.max(0, 3 - clean) : tier === 'Trusted' ? Math.max(0, 10 - clean) : 0;
   const status = await sellerStatus(seller);
-  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext, incorrectClaims, strikes: status.strikes, suspendedUntil: status.suspendedUntil, suspensionDays: status.suspensionDays, banned: status.banned, canSell: status.canSell };
+  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext, incorrectClaims, badListingStrikes: status.badListingStrikes, strikes: status.strikes, suspendedUntil: status.suspendedUntil, suspensionDays: status.suspensionDays, banned: status.banned, canSell: status.canSell };
 }
 function payoutHoursFor(tier, amount) {
   if (tier === 'Top') return 12;
@@ -2037,7 +2095,18 @@ app.get('/api/dashboard', async (req, res) => {
   const incorrectClaimStrikes = [];
   for (const seller of Object.keys(strikeMap)) {
     const st = await sellerStatus(seller);
-    incorrectClaimStrikes.push({ seller, strikes: st.strikes, suspendedUntil: st.suspendedUntil, suspensionDays: st.suspensionDays, banned: st.banned, canSell: st.canSell });
+    incorrectClaimStrikes.push({ seller, strikes: st.strikes, suspendedUntil: st.suspendedUntil, suspensionDays: st.claimSuspensionDays, banned: st.banned, canSell: st.canSell });
+  }
+  // Confirmed bad listings (Kevin, 2026-11-19): every seller with a
+  // listing the owner confirmed fake, stolen or banned, with their strike
+  // count — 1st = 7 days suspended, 2nd = 30 days, 3rd = removed for good.
+  const badRows = await query('SELECT * FROM bad_listing_strikes ORDER BY created_at ASC');
+  const badMap = {};
+  for (const c of badRows) { (badMap[c.seller] = badMap[c.seller] || []).push(c); }
+  const badListingStrikes = [];
+  for (const seller of Object.keys(badMap)) {
+    const st = await sellerStatus(seller);
+    badListingStrikes.push({ seller, strikes: st.badListingStrikes, suspendedUntil: st.badListingSuspendedUntil, suspensionDays: st.badListingSuspensionDays, banned: st.badListingBanned, canSell: st.canSell });
   }
   // Never-arrived / never-shipped sales (2026-11-19 fix): a sale that was
   // paid for but never delivered, 7+ days after the sale, can no longer sit
@@ -2053,7 +2122,7 @@ app.get('/api/dashboard', async (req, res) => {
     stuckSales.push({ id: _sl.id, title: _sl.title, seller: _sl.seller, winner: _sl.winner, shippedAt: _sl.shipped_at || null, saleDate: new Date(_sd).toISOString(), daysSinceSale: Math.floor((Date.now() - _sd) / (24 * 3600 * 1000)), neverArrivedRefundId: _nr ? _nr.id : null });
   }
   const neverArrivedRefunds = refunds.filter(rf => rf.reason === 'never arrived').map(rf => ({ id: rf.id, listingId: rf.listing_id, title: rf.title, requester: rf.requester, createdAt: rf.created_at, status: rf.status }));
-  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, stuckSales, neverArrivedRefunds, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
+  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, badListingStrikes, stuckSales, neverArrivedRefunds, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
 });
 app.post('/api/settings/tax', async (req, res) => {
   if (!requireOwner(req, res)) return;
@@ -2081,8 +2150,32 @@ app.delete('/api/listings/:id', async (req, res) => {
   await query('DELETE FROM chats WHERE listing_id=$1', [l.id]);
   await query('DELETE FROM top_limits WHERE listing_id=$1', [l.id]);
   await query('DELETE FROM wheel_items WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM wheel_entries WHERE listing_id=$1', [l.id]);
   await query('DELETE FROM listings WHERE id=$1', [l.id]);
   res.json({ ok: true, message: 'listing removed' });
+});
+// Owner confirms a listing is fake, stolen or a banned item (Kevin,
+// 2026-11-19): the listing is removed and it counts as a strike against
+// the seller — 1st confirmed bad listing = selling suspended 7 days, 2nd =
+// 30 days, 3rd = selling privileges removed for good. A report alone never
+// counts — only the owner's confirmation, one strike per listing.
+app.post('/api/listings/:id/confirm-bad', async (req, res) => {
+  if (!requireOwner(req, res)) return;
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  const reason = String((req.body && req.body.reason) || 'fake, stolen or banned item').trim().slice(0, 200);
+  const ex = await queryOne('SELECT * FROM bad_listing_strikes WHERE listing_id=$1', [l.id]);
+  if (ex) return res.json({ ok: false, error: 'this listing already counted — one strike per listing' });
+  if (l.status === 'sold' && l.escrow_status !== 'released' && l.escrow_status !== 'refunded') return res.json({ ok: false, error: 'this sale still has money held — settle the escrow first, then confirm' });
+  await query('INSERT INTO bad_listing_strikes(id,seller,seller_user_id,listing_id,reason,created_at) VALUES($1,$2,$3,$4,$5,$6)', [uid(), l.seller, l.seller_user_id || '', l.id, reason, nowISO()]);
+  await query('DELETE FROM bids WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM chats WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM top_limits WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM wheel_items WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM wheel_entries WHERE listing_id=$1', [l.id]);
+  await query('DELETE FROM listings WHERE id=$1', [l.id]);
+  const st = await sellerStatus(l.seller);
+  res.json({ ok: true, seller: l.seller, badListingStrikes: st.badListingStrikes, banned: st.banned, suspendedUntil: st.suspendedUntil, suspensionDays: st.suspensionDays, canSell: st.canSell });
 });
 app.post('/api/report', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;

@@ -124,6 +124,15 @@ CREATE TABLE IF NOT EXISTS wheel_entries (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, name TEXT NOT NULL,
   user_id TEXT DEFAULT '', created_at TEXT NOT NULL
 );
+-- Confirmed bad listings (Kevin, 2026-11-19): one row each time the OWNER
+-- confirms a listing is fake, stolen or a banned item and removes it. Same
+-- ladder as incorrect return claims: 1st = selling suspended 7 days, 2nd =
+-- 30 days, 3rd = selling privileges removed for good. One strike per
+-- listing — a report alone never counts, only the owner's confirmation.
+CREATE TABLE IF NOT EXISTS bad_listing_strikes (
+  id TEXT PRIMARY KEY, seller TEXT NOT NULL, seller_user_id TEXT DEFAULT '',
+  listing_id TEXT NOT NULL, reason TEXT DEFAULT '', created_at TEXT NOT NULL
+);
 -- Seller tokens (2026-11-19): one row per seller, SHA-256 hash only — the
 -- plain token is never stored. Issued the first time a seller lists or
 -- claims a founding spot, and returned to them once. Sellers who listed
