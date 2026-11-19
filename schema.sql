@@ -52,13 +52,13 @@ CREATE TABLE IF NOT EXISTS founding (id TEXT PRIMARY KEY, seller TEXT NOT NULL, 
 -- (payout date) closes, the refund expires (status 'expired') and no refund
 -- is given. Once the return IS shipped, it is never expired at the payout
 -- date - the buyer did their part. Delivery fix (Kevin, 2026-11-18): when the
--- carrier scans the return as DELIVERED, the refund releases at once - no
--- seller tap needed (return_delivered_at, POST /api/refunds/:id/
--- return-delivered - in test mode delivery is recorded from the tracking /
--- mark-as-delivered step, no live carrier feed yet - at go-live a real
--- carrier delivery scan does it automatically). Safety net: if the seller
--- never confirms receipt, the refund auto-releases 48 hours after the return
--- was shipped. return_due_at is the date the buyer must have shipped the
+-- carrier scans the return as DELIVERED, the delivery is recorded
+-- (return_delivered_at, POST /api/refunds/:id/return-delivered - in test
+-- mode delivery is recorded from the tracking / mark-as-delivered step, no
+-- live carrier feed yet - at go-live a real carrier delivery scan does it
+-- automatically). It does NOT release the refund at once. Safety net: if
+-- the seller never confirms receipt, the refund auto-releases 48 hours
+-- AFTER DELIVERY with no seller response (Kevin's rule). return_due_at is the date the buyer must have shipped the
 -- return by (the payout date, or 7 days after the owner rules a wrong-item
 -- dispute in the seller's favour). Buyer return proof (Kevin, 2026-11-18):
 -- before the buyer can mark a return shipped they must attach a photo and a
@@ -109,6 +109,32 @@ CREATE TABLE IF NOT EXISTS live_notice (
 CREATE TABLE IF NOT EXISTS wheel_items (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, name TEXT NOT NULL,
   photo_url TEXT DEFAULT '', position INTEGER DEFAULT 0, created_at TEXT NOT NULL
+);
+-- Seller tokens (2026-11-19): one row per seller, SHA-256 hash only — the
+-- plain token is never stored. Issued the first time a seller lists or
+-- claims a founding spot, and returned to them once. Sellers who listed
+-- before tokens existed have no row and are grandfathered once (see server).
+-- Real accounts (Kevin, 2026-11-19): buyers MUST have an account to bid
+-- or buy, sellers MUST have one to list. Passwords are scrypt hashes with
+-- a random salt — never stored plain, never returned. Sessions and reset
+-- tokens are stored as SHA-256 hashes only. Sessions expire after 30 days
+-- and reset tokens after 1 hour. email_verified starts at 0. In test mode
+-- bidding is allowed anyway (pre-launch, no real money).
+CREATE TABLE IF NOT EXISTS users (
+  id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
+  password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT DEFAULT 'buyer',
+  email_verified INTEGER DEFAULT 0, created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS sessions (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+  created_at TEXT NOT NULL, expires_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS password_resets (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
+  expires_at TEXT NOT NULL, used INTEGER DEFAULT 0
+);
+CREATE TABLE IF NOT EXISTS seller_tokens (
+  id TEXT PRIMARY KEY, seller TEXT NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS live_signals (
   id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL, recipient TEXT NOT NULL DEFAULT '',

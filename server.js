@@ -10,8 +10,38 @@ const crypto = require('crypto');
 const app = express();
 app.use(express.json({ limit: '2mb' }));
 app.use(express.static(path.join(__dirname, 'public')));
+// ---------- Rate limiting (in-memory, no new dependencies) ----------
+// 60 POST /api/* per minute per IP; stricter for chat/bid (20/min) and
+// waitlist / founding-claim (10/min). GETs are never limited. Exceeding
+// any bucket returns HTTP 429 with ok:false.
+const _rateBuckets = new Map();
+function _rateCheck(key, limit) {
+  const now = Date.now();
+  let b = _rateBuckets.get(key);
+  if (!b || now - b.start > 60000) { b = { start: now, count: 0 }; _rateBuckets.set(key, b); }
+  b.count++;
+  return b.count <= limit;
+}
+app.use((req, res, next) => {
+  if (req.method !== 'POST' || !req.path.startsWith('/api/')) return next();
+  const ip = req.ip || (req.socket && req.socket.remoteAddress) || 'unknown';
+  if (!_rateCheck('all:' + ip, 60)) return res.status(429).json({ ok: false, error: 'too many requests, slow down' });
+  if (/^\/api\/listings\/[^/]+\/(chat|bid)$/.test(req.path)) {
+    if (!_rateCheck('cb:' + ip + ':' + req.path, 20)) return res.status(429).json({ ok: false, error: 'too many requests, slow down' });
+  }
+  if (req.path === '/api/waitlist' || req.path === '/api/founding/claim') {
+    if (!_rateCheck('wl:' + ip, 10)) return res.status(429).json({ ok: false, error: 'too many requests, slow down' });
+  }
+  if (/^\/api\/auth\/(login|signup|forgot|reset)$/.test(req.path)) {
+    // Per-endpoint bucket (not one shared bucket): a few logins must not
+    // lock a user out of forgot/reset, and vice versa. 10/min each.
+    if (!_rateCheck('auth:' + ip + ':' + req.path, 10)) return res.status(429).json({ ok: false, error: 'too many requests, slow down' });
+  }
+  next();
+});
 
 const PORT = process.env.PORT || 3000;
+const OWNER_PASSWORD = process.env.OWNER_PASSWORD || '';
 const DATABASE_URL = process.env.DATABASE_URL || '';
 const PRELAUNCH = process.env.PRELAUNCH !== 'false';
 const isPg = !!DATABASE_URL;
@@ -119,6 +149,65 @@ async function getSettings() {
   if (!s) { await query('INSERT INTO settings(id, tax_percent, prelaunch, founding_total) VALUES(1,25,$1,10)', [PRELAUNCH ? 1 : 0]); s = await queryOne('SELECT * FROM settings WHERE id=1'); }
   return s;
 }
+// ---------- Owner lock ----------
+// OWNER_PASSWORD env var. If it is not set, the owner endpoints below are
+// NEVER open — they return ok:false "owner password not set". The password
+// is accepted as header x-owner-password or body ownerPassword.
+function _ownerSupplied(req) {
+  const h = req.headers && req.headers['x-owner-password'];
+  if (h) return String(h);
+  if (req.body && (req.body.ownerPassword || req.body.owner_password)) return String(req.body.ownerPassword || req.body.owner_password);
+  if (req.query && req.query.ownerPassword) return String(req.query.ownerPassword);
+  return '';
+}
+function _ownerOk(req) {
+  if (!OWNER_PASSWORD) return false;
+  const sup = _ownerSupplied(req);
+  if (!sup) return false;
+  const a = Buffer.from(sup), b = Buffer.from(OWNER_PASSWORD);
+  if (a.length !== b.length) return false;
+  try { return crypto.timingSafeEqual(a, b); } catch (e) { return false; }
+}
+function requireOwner(req, res) {
+  if (!OWNER_PASSWORD) { res.status(403).json({ ok: false, error: 'owner password not set' }); return false; }
+  if (!_ownerOk(req)) { res.status(403).json({ ok: false, error: 'owner password required' }); return false; }
+  return true;
+}
+// ---------- Seller identity (no passwords for sellers, test-friendly) ----------
+// First time a seller name is used to create a listing or claim a founding
+// spot, the server issues a random token, stores only its SHA-256 hash in
+// seller_tokens, and returns the plain token ONCE. The client keeps it in
+// localStorage keyed by seller name and sends it as x-seller-token (or body
+// sellerToken) on seller-only actions. The plain token is never stored.
+// GRANDFATHERING: listings made before tokens existed have no token row for
+// that seller. In that case the action is allowed once AND a token is issued
+// in the response, so the seller gets one going forward.
+function _hashToken(t) { return crypto.createHash('sha256').update(String(t)).digest('hex'); }
+async function _issueSellerToken(seller) {
+  const token = crypto.randomBytes(24).toString('hex');
+  await query('INSERT INTO seller_tokens(id,seller,token_hash,created_at) VALUES($1,$2,$3,$4)', [uid(), seller, _hashToken(token), nowISO()]);
+  return token;
+}
+async function ensureSellerToken(seller) {
+  if (!seller) return null;
+  const rows = await query('SELECT id FROM seller_tokens WHERE seller=$1', [seller]);
+  if (rows.length) return null;
+  return _issueSellerToken(seller);
+}
+async function checkSellerToken(req, res, seller) {
+  // Returns { newToken? } on success, or sends a 403 and returns null.
+  if (!seller) { res.status(403).json({ ok: false, error: 'seller name is required' }); return null; }
+  const rows = await query('SELECT token_hash FROM seller_tokens WHERE seller=$1', [seller]);
+  if (!rows.length) {
+    // Grandfathered seller (listed before tokens existed): allow once and
+    // issue a token in the response so they have one going forward.
+    return { newToken: await _issueSellerToken(seller) };
+  }
+  const supplied = (req.headers && req.headers['x-seller-token']) || (req.body && (req.body.sellerToken || req.body.token)) || '';
+  if (!supplied) { res.status(403).json({ ok: false, error: 'seller token required — use the token given when this seller first listed or claimed a founding spot' }); return null; }
+  if (!rows.some(r => r.token_hash === _hashToken(supplied))) { res.status(403).json({ ok: false, error: 'seller token does not match this seller' }); return null; }
+  return {};
+}
 async function init() {
   const schema = fs.readFileSync(path.join(__dirname, 'schema.sql'), 'utf8');
   for (const st of schema.split(';')) { const t = st.trim(); if (t) { try { await query(t); } catch (e) { /* table may exist */ } } }
@@ -152,8 +241,185 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN return_due_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_photo_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_video_name TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE listings ADD COLUMN seller_user_id TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE bids ADD COLUMN bidder_user_id TEXT'); } catch (e) { /* column already exists */ }
   await getSettings();
 }
+// ---------- Real accounts (Kevin, 2026-11-19) ----------
+// Buyers MUST have an account to bid or buy, and sellers MUST have an
+// account to list. Before this, anyone could type any name and the site
+// believed them. Now every bid, buy, listing, chat message and refund
+// comes from the signed-in account — a name typed in a form is IGNORED
+// server-side. Passwords are scrypt hashes with a random salt (never
+// stored plain, never returned). Sessions are random tokens, only the
+// SHA-256 hash is stored, and they expire after 30 days.
+// Email verification: email_verified starts at 0. In TEST MODE bidding
+// is allowed anyway (the site is still pre-launch, no real money). When
+// a Resend key is set, signup tries to send a verification note but
+// never blocks signup on it — verification becomes a go-live step.
+// The old seller-token check stays as a SECOND layer on seller actions;
+// the session is now the primary identity.
+function _hashPassword(password, salt) { return crypto.scryptSync(String(password), salt, 64).toString('hex'); }
+function _passwordOk(password, salt, hash) {
+  try {
+    const a = Buffer.from(_hashPassword(password, salt), 'hex');
+    const b = Buffer.from(String(hash), 'hex');
+    if (a.length !== b.length) return false;
+    return crypto.timingSafeEqual(a, b);
+  } catch (e) { return false; }
+}
+function _publicUser(u) { return u ? { id: u.id, name: u.name, email: u.email, role: u.role, emailVerified: !!u.email_verified } : null; }
+async function _createSession(userId) {
+  const token = crypto.randomBytes(24).toString('hex'); // 48 hex chars
+  const expiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+  await query('INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5)', [uid(), userId, _hashToken(token), nowISO(), expiresAt]);
+  return token;
+}
+async function _userFromSession(req) {
+  const token = (req.headers && req.headers['x-session-token']) || (req.body && req.body.sessionToken) || '';
+  if (!token) return null;
+  const row = await queryOne('SELECT * FROM sessions WHERE token_hash=$1', [_hashToken(token)]);
+  if (!row) return null;
+  if (row.expires_at && new Date(row.expires_at) <= new Date()) { await query('DELETE FROM sessions WHERE id=$1', [row.id]); return null; }
+  return queryOne('SELECT * FROM users WHERE id=$1', [row.user_id]);
+}
+async function requireAuth(req, res) {
+  const u = await _userFromSession(req);
+  if (!u) { res.status(401).json({ ok: false, error: 'sign in to do that — buyers and sellers need an account to bid, buy, list or chat' }); return null; }
+  req.user = u;
+  return u;
+}
+// Seller-only gate: signed in, account is seller/both (not buyer-only),
+// and the session user IS that seller. New listings store seller_user_id,
+// so two accounts with the same display name cannot act as each other;
+// older listings with no seller_user_id fall back to a name match.
+function _sellerMatches(req, l) {
+  if (!l) return false;
+  if (l.seller_user_id) return l.seller_user_id === req.user.id;
+  return req.user.name === l.seller;
+}
+async function requireSellerFor(req, res, l) {
+  const u = await requireAuth(req, res); if (!u) return null;
+  if (u.role === 'buyer') { res.json({ ok: false, error: 'sign up as a seller to do that — your account is a buyer account' }); return null; }
+  if (!_sellerMatches(req, l)) { res.json({ ok: false, error: 'only the seller can do that' }); return null; }
+  return u;
+}
+async function _issueResetToken(userId) {
+  const token = crypto.randomBytes(24).toString('hex');
+  const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString(); // 1 hour
+  await query('INSERT INTO password_resets(id,user_id,token_hash,expires_at,used) VALUES($1,$2,$3,$4,0)', [uid(), userId, _hashToken(token), expiresAt]);
+  return token;
+}
+async function _sendAccountEmail(email, subject, text) {
+  if (!process.env.RESEND_API_KEY) return { sent: false, mode: 'manual' };
+  try {
+    const fromEmail = process.env.FROM_EMAIL || 'Bring Time Back and More <onboarding@resend.dev>';
+    const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { Authorization: 'Bearer ' + process.env.RESEND_API_KEY, 'Content-Type': 'application/json' }, body: JSON.stringify({ from: fromEmail, to: [email], subject, text }), signal: AbortSignal.timeout(10000) });
+    const data = await r.json().catch(() => ({}));
+    if (!r.ok) return { sent: false, mode: 'resend', error: 'Resend failed (' + r.status + ')' };
+    return { sent: true, mode: 'resend', resendId: data.id || null };
+  } catch (e) { return { sent: false, mode: 'resend', error: 'Resend request failed: ' + e.message }; }
+}
+// In test mode (no Resend key) the reset token is returned in the
+// response, labelled test-only, so Kevin can hand it to the locked-out
+// user himself. When a key IS set the token is emailed and NEVER
+// returned in the response.
+function _resetTokenForResponse(token) {
+  return process.env.RESEND_API_KEY ? {} : { resetToken: token, testOnly: 'test mode — no email key set, so this reset code is shown here for Kevin to pass on. It expires in 1 hour.' };
+}
+app.post('/api/auth/signup', async (req, res) => {
+  const b = req.body || {};
+  const name = String(b.name || '').trim().slice(0, 100);
+  const email = String(b.email || '').trim().toLowerCase();
+  const password = String(b.password || '');
+  const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
+  if (!name) return res.json({ ok: false, error: 'your name is required' });
+  if (!email || !email.includes('@')) return res.json({ ok: false, error: 'a valid email is required' });
+  if (password.length < 8) return res.json({ ok: false, error: 'password must be at least 8 characters' });
+  const ex = await queryOne('SELECT id FROM users WHERE email=$1', [email]);
+  if (ex) return res.json({ ok: false, error: 'an account with that email already exists — sign in instead' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  const id = uid();
+  await query('INSERT INTO users(id,name,email,password_hash,salt,role,email_verified,created_at) VALUES($1,$2,$3,$4,$5,$6,0,$7)',
+    [id, name, email, _hashPassword(password, salt), salt, role, nowISO()]);
+  const user = await queryOne('SELECT * FROM users WHERE id=$1', [id]);
+  const token = await _createSession(id);
+  // Verification note in test mode: best effort only, never blocks signup.
+  _sendAccountEmail(email, 'Your Bring Time Back and More account',
+    'Hi ' + name + ',\n\nYour Bring Time Back and More account is ready — you can bid, buy and sell.\n\nYou signed up as: ' + role + '.\n\nSee you there,\nBring Time Back and More').catch(() => {});
+  res.json({ ok: true, user: _publicUser(user), sessionToken: token });
+});
+app.post('/api/auth/login', async (req, res) => {
+  const b = req.body || {};
+  const email = String(b.email || '').trim().toLowerCase();
+  const password = String(b.password || '');
+  const user = await queryOne('SELECT * FROM users WHERE email=$1', [email]);
+  // Generic error either way — never reveal whether the email exists.
+  if (!user || !_passwordOk(password, user.salt, user.password_hash)) return res.json({ ok: false, error: 'email or password is wrong' });
+  const token = await _createSession(user.id);
+  res.json({ ok: true, user: _publicUser(user), sessionToken: token });
+});
+app.get('/api/auth/me', async (req, res) => {
+  const u = await _userFromSession(req);
+  if (!u) return res.status(401).json({ ok: false, error: 'not signed in' });
+  res.json({ ok: true, user: _publicUser(u) });
+});
+app.post('/api/auth/logout', async (req, res) => {
+  const token = (req.headers && req.headers['x-session-token']) || (req.body && req.body.sessionToken) || '';
+  if (token) await query('DELETE FROM sessions WHERE token_hash=$1', [_hashToken(token)]);
+  res.json({ ok: true });
+});
+app.post('/api/auth/forgot', async (req, res) => {
+  const email = String((req.body && req.body.email) || '').trim().toLowerCase();
+  const user = email ? await queryOne('SELECT * FROM users WHERE email=$1', [email]) : null;
+  // Always ok:true — never reveal whether the email has an account.
+  if (!user) return res.json({ ok: true, message: 'if that email has an account, a reset code was sent' });
+  const token = await _issueResetToken(user.id);
+  const sent = await _sendAccountEmail(email, 'Reset your password — Bring Time Back and More',
+    'Hi ' + user.name + ',\n\nYour password reset code is:\n\n' + token + '\n\nIt expires in 1 hour. Paste it into the Forgot password box on the site with your new password.\n\nIf you did not ask for this, ignore this email — your password has not changed.\n\nBring Time Back and More');
+  if (sent.sent) return res.json({ ok: true, message: 'reset code sent to your email — it expires in 1 hour' });
+  return res.json({ ok: true, message: 'if that email has an account, a reset code was sent', ..._resetTokenForResponse(token) });
+});
+app.post('/api/auth/reset', async (req, res) => {
+  const b = req.body || {};
+  const token = String(b.token || b.resetToken || '');
+  const newPassword = String(b.newPassword || b.password || '');
+  if (!token) return res.json({ ok: false, error: 'a reset code is required' });
+  if (newPassword.length < 8) return res.json({ ok: false, error: 'new password must be at least 8 characters' });
+  const row = await queryOne('SELECT * FROM password_resets WHERE token_hash=$1', [_hashToken(token)]);
+  if (!row || row.used) return res.json({ ok: false, error: 'reset code is wrong or already used' });
+  if (row.expires_at && new Date(row.expires_at) <= new Date()) return res.json({ ok: false, error: 'reset code has expired — ask for a new one' });
+  const salt = crypto.randomBytes(16).toString('hex');
+  await query('UPDATE users SET password_hash=$1, salt=$2 WHERE id=$3', [_hashPassword(newPassword, salt), salt, row.user_id]);
+  await query('UPDATE password_resets SET used=1 WHERE id=$1', [row.id]);
+  await query('DELETE FROM sessions WHERE user_id=$1', [row.user_id]); // all devices signed out
+  res.json({ ok: true, message: 'password changed — sign in with your new password' });
+});
+// Seller-token recovery, tied to the account: a signed-in seller whose
+// browser lost its seller token (new device, cleared site data) can get a
+// fresh one — the session proves who they are, so this does not weaken
+// the token check. Old tokens for that seller are replaced. The client
+// calls this on sign-in for seller accounts, so the token is always in
+// sync after a sign-in.
+app.post('/api/auth/seller-token', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to get a seller token — your account is a buyer account' });
+  await query('DELETE FROM seller_tokens WHERE seller=$1', [u.name]);
+  const token = await _issueSellerToken(u.name);
+  res.json({ ok: true, sellerToken: token });
+});
+app.post('/api/auth/owner-reset', async (req, res) => {
+  if (!requireOwner(req, res)) return;
+  const email = String((req.body && (req.body.userEmail || req.body.email)) || '').trim().toLowerCase();
+  const user = email ? await queryOne('SELECT * FROM users WHERE email=$1', [email]) : null;
+  if (!user) return res.json({ ok: false, error: 'no account with that email' });
+  const token = await _issueResetToken(user.id);
+  const sent = await _sendAccountEmail(email, 'Reset your password — Bring Time Back and More',
+    'Hi ' + user.name + ',\n\nKevin (the owner) reset your password for you. Your reset code is:\n\n' + token + '\n\nIt expires in 1 hour. Paste it into the Forgot password box on the site with your new password.\n\nBring Time Back and More');
+  if (sent.sent) return res.json({ ok: true, message: 'reset code sent to ' + email });
+  return res.json({ ok: true, message: 'reset code ready for Kevin to pass on', ..._resetTokenForResponse(token) });
+});
+
 // ---------- Time Wheel ----------
 // A Time Wheel listing is an auction whose prize is picked by the wheel: the
 // seller loads up to 100 items, buyers see them all before bidding, the winner
@@ -195,22 +461,21 @@ async function spinWheelFor(l) {
 // money, not the buyer's and not the owner's fees. If the buyer never ships
 // the return back before the refund window (payout date) closes, the refund
 // EXPIRES and no refund is given - the seller keeps the sale.
-// HOLE FIXED (Kevin, 2026-11-18): the buyer must NOT lose out if the seller
-// never taps "I got it back" after the return was actually delivered. When
-// the carrier scans the return as DELIVERED, the system records it as
-// delivered on its own and releases the refund - no seller tap needed. In
-// test mode there is no live carrier feed yet, so delivery is recorded from
-// the tracking / "Mark return as delivered" step (POST /api/refunds/:id/
-// return-delivered, usable by the buyer or the owner); at go-live a real
-// carrier delivery scan will do this automatically. Safety net: once the
-// return is shipped, the refund auto-releases 48 hours after the return was
-// shipped if the seller still has not confirmed receipt - the seller cannot
-// stall it forever by just not tapping. A return that has been shipped is
-// never expired at the payout date - it waits for that 48-hour release.
+// 48-HOUR RULE (Kevin, 2026-11-18, fixed 2026-11-19): NO auto-release until
+// 48 hours AFTER DELIVERY pass with no seller response. Marking a return as
+// delivered only records return_delivered_at and starts the 48-hour clock —
+// it does NOT release the refund. The sweep releases it only when
+// now >= delivered_at + 48h. A shipped return is never expired at the payout
+// date - it waits for delivery, then for that 48-hour window. A wrong-item
+// dispute (status 'disputed') pauses the auto-release entirely, because the
+// sweep only runs on 'awaiting_return'. In test mode delivery is recorded
+// from the tracking / "Mark return as delivered" step (POST
+// /api/refunds/:id/return-delivered, usable by the buyer or the owner); at
+// go-live a real carrier delivery scan will do this automatically.
 const RETURN_AUTO_RELEASE_HOURS = 48;
 function returnAutoReleaseAt(rf) {
-  if (!rf || !rf.return_shipped_at) return null;
-  return new Date(new Date(rf.return_shipped_at).getTime() + RETURN_AUTO_RELEASE_HOURS * 3600 * 1000).toISOString();
+  if (!rf || !rf.return_delivered_at) return null;
+  return new Date(new Date(rf.return_delivered_at).getTime() + RETURN_AUTO_RELEASE_HOURS * 3600 * 1000).toISOString();
 }
 function withReturnDates(rf) {
   if (!rf) return rf;
@@ -218,8 +483,9 @@ function withReturnDates(rf) {
 }
 // Release an approved refund from the seller's escrow money. `how` says why
 // the item is counted as back: 'seller_confirmed' (seller tapped),
-// 'delivered' (carrier scan / mark-as-delivered), or 'auto' (48 hours passed
-// since the return was shipped with no seller confirm).
+// 'delivered' (kept for compatibility — a delivery record on its own no
+// longer releases a refund; see the 48-hour rule above), or 'auto' (48 hours
+// passed since the return was DELIVERED with no seller confirm).
 async function releaseRefund(rf, l, how) {
   const now = nowISO();
   await query("UPDATE refunds SET return_received_at=$1, return_delivered_at=$2, status='approved' WHERE id=$3",
@@ -228,7 +494,7 @@ async function releaseRefund(rf, l, how) {
   const note = how === 'delivered'
     ? 'The return was scanned as DELIVERED (tracking ' + (rf.return_tracking || rf.return_label_tracking || '') + ') — the refund is released from the seller\'s escrow money. No seller tap was needed.'
     : how === 'auto'
-      ? 'The return was shipped 48 hours ago and the seller never confirmed receipt, so the refund released on its own from the seller\'s escrow money — the seller cannot stall it by not tapping.'
+      ? 'The return was delivered 48 hours ago and the seller never confirmed receipt, so the refund released on its own from the seller\'s escrow money — the seller cannot stall it by not tapping.'
       : how === 'dispute_correct'
         ? 'The owner reviewed the seller\'s photo and video of what came back against the receipt and video receipt — the item sent back is the correct item, so the claim was not upheld, the dispute is closed, and the refund is released from the seller\'s escrow money.'
         : 'Seller confirmed they received the item back — the refund is now released from the seller\'s escrow money.';
@@ -236,12 +502,12 @@ async function releaseRefund(rf, l, how) {
     [uid(), l.id, l.seller, note, now]);
   return { ok: true, status: 'approved' };
 }
-// Auto-release: a shipped return the seller never confirms. Runs in the sweep
-// (every second) and before refund reads / escrow release, so a stalled
+// Auto-release: a DELIVERED return the seller never confirms. Runs in the
+// sweep (every second) and before refund reads / escrow release, so a stalled
 // refund never blocks the seller's payout forever and the buyer never loses
-// out because the seller did not tap.
+// out because the seller did not tap. Only fires 48 hours after delivery.
 async function autoReleaseReturns() {
-  const shipped = await query("SELECT * FROM refunds WHERE status='awaiting_return' AND return_shipped_at IS NOT NULL AND return_shipped_at <> ''");
+  const shipped = await query("SELECT * FROM refunds WHERE status='awaiting_return' AND return_delivered_at IS NOT NULL AND return_delivered_at <> ''");
   for (const rf of shipped) {
     const at = returnAutoReleaseAt(rf);
     if (at && new Date() >= new Date(at)) {
@@ -253,7 +519,8 @@ async function autoReleaseReturns() {
 async function expireRefundIfPast(l, rf) {
   if (!rf || !['pending', 'awaiting_return'].includes(rf.status)) return rf;
   // A return already shipped back is never expired at the payout date - the
-  // buyer did their part, so it waits for the 48-hour auto-release instead.
+  // buyer did their part, so it waits for delivery, then the 48-hour
+  // auto-release after delivery, instead.
   if (rf.status === 'awaiting_return' && rf.return_shipped_at) return rf;
   const payout = await payoutFor(l);
   // Deadline is the payout date, unless the owner gave the buyer a new
@@ -369,9 +636,9 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
   const id = uid();
   const img = isRandom ? '' : (typeof b.imageUrl === 'string' ? b.imageUrl.slice(0, 1500000) : '');
-  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20)`,
-    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0]);
+  await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random,seller_user_id)
+    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20,$21)`,
+    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), img, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null]);
   for (let i = 0; i < wheelItems.length; i++) {
     await query('INSERT INTO wheel_items(id,listing_id,name,photo_url,position,created_at) VALUES($1,$2,$3,$4,$5,$6)',
       [uid(), id, wheelItems[i].name, wheelItems[i].photoUrl || '', i, nowISO()]);
@@ -379,9 +646,12 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   return id;
 }
 app.post('/api/listings', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to list — your account is a buyer account' });
   const b = req.body || {};
+  // The seller is the signed-in account — a seller name typed in the form is ignored.
+  b.seller = u.name; b.sellerUserId = u.id;
   const isRandom = !!(b.isRandom || b.random || b.randomCount);
-  if (!b.seller) return res.json({ ok: false, error: 'seller name is required' });
   // INCORRECT-CLAIM LADDER (Kevin, 2026-11-18): 1st incorrect return claim
   // = selling privileges suspended for 7 days, 2nd = 30 days, 3rd = selling
   // privileges removed for good. While suspended the seller cannot list.
@@ -420,7 +690,8 @@ app.post('/api/listings', async (req, res) => {
       const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, auth, timer, true, cond);
       ids.push(id); titles.push(title);
     }
-    return res.json({ ok: true, ids, titles, count, isRandom: true });
+    const _st = await ensureSellerToken(b.seller);
+    return res.json({ ok: true, ids, titles, count, isRandom: true, ...(_st ? { sellerToken: _st } : {}) });
   }
   const bad = bannedHit(b.title + ' ' + (b.description || ''));
   if (bad) return res.json({ ok: false, error: 'banned item: ' + bad });
@@ -435,7 +706,8 @@ app.post('/api/listings', async (req, res) => {
   if (type === 'wheel' && !wheelItems.length) return res.json({ ok: false, error: 'a Time Wheel needs at least 1 item on it (up to 100) — one per line' });
   if (wheelItems.length > 100) return res.json({ ok: false, error: 'a Time Wheel holds at most 100 items' });
   const id = await insertListing(b, b.title, b.description || '', type, wheelItems, shipAmt, sizePrice, auth, timer, false, cond);
-  res.json({ ok: true, id, wheelCount: wheelItems.length });
+  const _st = await ensureSellerToken(b.seller);
+  res.json({ ok: true, id, wheelCount: wheelItems.length, ...(_st ? { sellerToken: _st } : {}) });
 });
 // Seller records what the winner actually won on a random item — the item
 // they held up live on camera. Seller-only, only after the item is won and
@@ -444,7 +716,8 @@ app.post('/api/listings/:id/reveal', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (!l.is_random) return res.json({ ok: false, error: 'this is not a Random Item' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can say what the winner won' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the winner has to win and pay first — then say what they won' });
   const revealed = String(req.body.revealedItem || req.body.revealed || '').trim().slice(0, 120);
   if (!revealed) return res.json({ ok: false, error: 'type what they won — e.g. Invicta Lupah watch' });
@@ -452,10 +725,11 @@ app.post('/api/listings/:id/reveal', async (req, res) => {
   await query('UPDATE listings SET revealed_item=$1, revealed_at=$2 WHERE id=$3', [revealed, nowISO(), l.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `🎲 Revealed live on camera: ${revealed} — that is what ${l.winner} won.`, nowISO()]);
-  res.json({ ok: true, revealedItem: revealed });
+  res.json({ ok: true, revealedItem: revealed, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // ---------- Bidding ----------
 app.post('/api/listings/:id/bid', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'this is a Store listing — Buy Now only, no bidding' });
@@ -463,7 +737,8 @@ app.post('/api/listings/:id/bid', async (req, res) => {
   if (l.ends_at && new Date(l.ends_at) <= new Date()) { await sweep(); return res.json({ ok: false, error: 'auction has ended' }); }
   const amount = Number(req.body.amount);
   if (!amount || amount <= l.current_bid) return res.json({ ok: false, error: 'bid must beat the current bid of $' + l.current_bid });
-  await query('INSERT INTO bids(id,listing_id,bidder,amount,created_at) VALUES($1,$2,$3,$4,$5)', [uid(), l.id, req.body.bidder || 'Buyer', amount, nowISO()]);
+  // The bidder is the signed-in account — a bidder name typed in the form is ignored.
+  await query('INSERT INTO bids(id,listing_id,bidder,amount,created_at,bidder_user_id) VALUES($1,$2,$3,$4,$5,$6)', [uid(), l.id, u.name, amount, nowISO(), u.id]);
   let endsAt = l.ends_at;
   if (l.mode === 'Regular' && endsAt) endsAt = new Date(new Date(endsAt).getTime() + 10000).toISOString();
   // Sudden Death: endsAt unchanged.
@@ -522,28 +797,35 @@ app.post('/api/listings/:id/spin', async (req, res) => {
   if (l.type !== 'wheel') return res.json({ ok: false, error: 'this is not a Time Wheel listing' });
   if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the wheel spins only after the winner pays' });
   if (l.wheel_spun && l.wheel_landed_item) return res.json({ ok: true, alreadySpun: true, landedItem: l.wheel_landed_item, landedAt: l.wheel_landed_at });
-  const who = req.body && req.body.name;
-  if (who && who !== l.seller && who !== l.winner) return res.json({ ok: false, error: 'only the seller or the winner can spin the Time Wheel' });
+  const u = await requireAuth(req, res); if (!u) return;
+  const who = u.name;
+  if (who !== l.seller && who !== l.winner) return res.json({ ok: false, error: 'only the seller or the winner can spin the Time Wheel' });
+  let _tok = null;
+  if (who === l.seller) { _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return; }
   const landed = await spinWheelFor(l);
   if (!landed) return res.json({ ok: false, error: 'no items on the wheel' });
-  res.json({ ok: true, ...landed });
+  res.json({ ok: true, ...landed, ...(_tok && _tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/buy-now', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || l.type !== 'buy_now') return res.json({ ok: false, error: 'not a Store listing' });
   if (l.status !== 'live') return res.json({ ok: false, error: 'already sold' });
-  const r = await completeSale(l, req.body.buyer || 'Buyer', req.body.method, req.body.detail);
+  const r = await completeSale(l, u.name, req.body.method, req.body.detail);
   res.json(r);
 });
 app.post('/api/listings/:id/pay', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || l.status !== 'ended') return res.json({ ok: false, error: 'auction has not ended / no winner to pay' });
+  if (u.name !== l.winner) return res.json({ ok: false, error: 'only the winner can pay for this item' });
   const r = await completeSale(l, l.winner, req.body.method, req.body.detail);
   res.json(r);
 });
 app.post('/api/listings/:id/notify-fix', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!await requireSellerFor(req, res, l)) return;
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `Payment fix needed: $${(l.current_bid || 0) + (l.shipping || 0)} is owed for "${l.title}". Please fix your payment and try again.`, nowISO()]);
   res.json({ ok: true });
@@ -551,7 +833,8 @@ app.post('/api/listings/:id/notify-fix', async (req, res) => {
 app.post('/api/listings/:id/rerun', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (req.body.seller && req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can rerun this auction' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (l.payment_status === 'validated') return res.json({ ok: false, error: 'payment went through — cannot rerun' });
   if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'Store items cannot be rerun' });
   if (l.status === 'live') return res.json({ ok: false, error: 'auction is already live' });
@@ -559,7 +842,7 @@ app.post('/api/listings/:id/rerun', async (req, res) => {
   await query('DELETE FROM bids WHERE listing_id=$1', [l.id]);
   await query(`UPDATE listings SET status='live', winner=NULL, payment_status='none', payment_reason='', escrow_status='not_started', escrow_amount=0,
     current_bid=start_price, created_at=$1, ends_at=$2, delivered=0, delivered_at=NULL, tracking=NULL, shipped_at=NULL, wheel_landed_item='', wheel_landed_at=NULL, wheel_spun=0, revealed_item='', revealed_at=NULL WHERE id=$3`, [created.toISOString(), ends.toISOString(), l.id]);
-  res.json({ ok: true, endsAt: ends.toISOString() });
+  res.json({ ok: true, endsAt: ends.toISOString(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // ---------- Shipping / escrow release ----------
 // Mark as shipped: the seller scans the sale's QR code, lands on this exact
@@ -568,19 +851,22 @@ app.post('/api/listings/:id/rerun', async (req, res) => {
 app.post('/api/listings/:id/mark-shipped', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can mark this shipped' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until the item is sold and payment validates' });
   if (l.shipped_at) return res.json({ ok: false, error: 'already marked as shipped' });
   const carrier = l.carrier || carrierFor(l.package_size);
   const tracking = l.tracking || makeTracking(carrier);
   await query('UPDATE listings SET tracking=$1, carrier=$2, shipped_at=$3, escrow_status=$4 WHERE id=$5', [tracking, carrier, nowISO(), 'held_waiting_delivery', l.id]);
-  res.json({ ok: true, tracking, carrier, shippedAt: nowISO() });
+  res.json({ ok: true, tracking, carrier, shippedAt: nowISO(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/ship', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || l.payment_status !== 'validated') return res.json({ ok: false, error: 'cannot ship until payment validates' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   await query('UPDATE listings SET tracking=$1, escrow_status=$2 WHERE id=$3', [req.body.tracking || l.tracking || '', 'held_waiting_delivery', l.id]);
-  res.json({ ok: true });
+  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // ---------- Tiered seller payout timing (Kevin, 2026-11-18) ----------
 // A seller's tier is earned by CLEAN completed sales: a sale that completed,
@@ -673,14 +959,18 @@ async function payoutFor(l) {
 app.post('/api/listings/:id/deliver', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || !l.tracking) return res.json({ ok: false, error: 'tracking must be on file first' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   await query('UPDATE listings SET delivered=1, delivered_at=$1, escrow_status=$2 WHERE id=$3', [nowISO(), 'held_refund_window', l.id]);
   const updated = await queryOne('SELECT * FROM listings WHERE id=$1', [l.id]);
   const payout = await payoutFor(updated);
-  res.json({ ok: true, releaseAt: payout.payoutAt, payout });
+  res.json({ ok: true, releaseAt: payout.payoutAt, payout, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/release-escrow', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (!l.delivered_at) return res.json({ ok: false, error: 'not delivered yet' });
   if (l.escrow_status === 'refunded') return res.json({ ok: false, error: 'a refund was already given on this sale' });
   const payout = await payoutFor(l);
@@ -691,27 +981,35 @@ app.post('/api/listings/:id/release-escrow', async (req, res) => {
   const refund = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [l.id]);
   if (refund) return res.json({ ok: false, error: 'a refund request is pending', payout });
   await query("UPDATE listings SET escrow_status='released' WHERE id=$1", [l.id]);
-  res.json({ ok: true });
+  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 
 // ---------- Chat / live ----------
 app.get('/api/listings/:id/chat', async (req, res) => res.json(await query('SELECT * FROM chats WHERE listing_id=$1 ORDER BY created_at ASC', [req.params.id])));
 app.post('/api/listings/:id/chat', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (adHit(req.body.message || '')) return res.json({ ok: false, error: AD_ERROR });
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,$5,$6)',
-    [uid(), l.id, req.body.name || 'Buyer', req.body.message || '', req.body.name === l.seller ? 1 : 0, nowISO()]);
+    [uid(), l.id, u.name, req.body.message || '', u.name === l.seller ? 1 : 0, nowISO()]);
   res.json({ ok: true });
 });
 app.post('/api/listings/:id/go-live', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
-  if (!l || req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can go live' });
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   await query('UPDATE listings SET seller_live=1, seller_live_at=$1 WHERE id=$2', [nowISO(), l.id]);
-  res.json({ ok: true });
+  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/end-live', async (req, res) => {
-  await query('UPDATE listings SET seller_live=0 WHERE id=$1', [req.params.id]); res.json({ ok: true });
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
+  await query('UPDATE listings SET seller_live=0 WHERE id=$1', [req.params.id]);
+  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // ---------- Live video signalling (WebRTC, peer-to-peer, no paid service) ----------
 // Signals carry SDP offers/answers and ICE candidates between the seller and each
@@ -735,22 +1033,25 @@ app.get('/api/listings/:id/signal', async (req, res) => {
 app.post('/api/listings/:id/buy-now-offer', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || (l.type !== 'auction' && l.type !== 'wheel')) return res.json({ ok: false, error: 'offers in chat are for auctions only' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can post a Buy It Now offer' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   await query('UPDATE listings SET buy_now_offer=$1, buy_now_offer_by=$2 WHERE id=$3', [Number(req.body.amount), l.seller, l.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `Buy It Now offer: $${req.body.amount} — accept it in chat and the auction ends at that price.`, nowISO()]);
-  res.json({ ok: true });
+  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 app.post('/api/listings/:id/accept-offer', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
   if (!l || !l.buy_now_offer) return res.json({ ok: false, error: 'no Buy It Now offer in chat' });
   await query("UPDATE listings SET status='ended', winner=$1, current_bid=$2, payment_status='awaiting_payment', escrow_status='not_started', escrow_amount=0 WHERE id=$3",
-    [req.body.buyer || 'Buyer', l.buy_now_offer, l.id]);
+    [u.name, l.buy_now_offer, l.id]);
   res.json({ ok: true, amount: l.buy_now_offer });
 });
 // ---------- Keep Track / Free Drops / Top Limit / Scorecard / Coming Up ----------
 app.post('/api/follow', async (req, res) => {
-  await query('INSERT INTO follows(id,buyer,seller,created_at) VALUES($1,$2,$3,$4)', [uid(), req.body.buyer, req.body.seller, nowISO()]);
+  const u = await requireAuth(req, res); if (!u) return;
+  await query('INSERT INTO follows(id,buyer,seller,created_at) VALUES($1,$2,$3,$4)', [uid(), u.name, req.body.seller, nowISO()]);
   res.json({ ok: true, message: 'Now keeping track of ' + req.body.seller });
 });
 app.get('/api/following/:buyer', async (req, res) => {
@@ -765,32 +1066,37 @@ app.get('/api/following/:buyer', async (req, res) => {
   res.json(out);
 });
 app.post('/api/drops', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to start a Free Drop — your account is a buyer account' });
   if (adHit(req.body.title || '')) return res.json({ ok: false, error: AD_ERROR });
   const id = uid();
-  await query('INSERT INTO drops(id,seller,title,ends_at,status,created_at) VALUES($1,$2,$3,$4,$5,$6)', [id, req.body.seller, req.body.title, req.body.endsAt || new Date(Date.now() + 60000).toISOString(), 'open', nowISO()]);
+  await query('INSERT INTO drops(id,seller,title,ends_at,status,created_at) VALUES($1,$2,$3,$4,$5,$6)', [id, u.name, req.body.title, req.body.endsAt || new Date(Date.now() + 60000).toISOString(), 'open', nowISO()]);
   res.json({ ok: true, id });
 });
 app.get('/api/drops', async (req, res) => res.json(await query('SELECT * FROM drops ORDER BY created_at DESC')));
 app.post('/api/drops/:id/enter', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const d = await queryOne('SELECT * FROM drops WHERE id=$1', [req.params.id]);
   if (!d || d.status !== 'open') return res.json({ ok: false, error: 'drop is closed' });
-  const ex = await queryOne('SELECT * FROM drop_entries WHERE drop_id=$1 AND name=$2', [d.id, req.body.name]);
+  const ex = await queryOne('SELECT * FROM drop_entries WHERE drop_id=$1 AND name=$2', [d.id, u.name]);
   if (ex) return res.json({ ok: false, error: 'one entry per person' });
-  await query('INSERT INTO drop_entries(id,drop_id,name,created_at) VALUES($1,$2,$3,$4)', [uid(), d.id, req.body.name, nowISO()]);
+  await query('INSERT INTO drop_entries(id,drop_id,name,created_at) VALUES($1,$2,$3,$4)', [uid(), d.id, u.name, nowISO()]);
   res.json({ ok: true });
 });
 app.post('/api/top-limit', async (req, res) => {
-  await query('INSERT INTO top_limits(id,listing_id,buyer,max_amount,created_at) VALUES($1,$2,$3,$4,$5)', [uid(), req.body.listingId, req.body.buyer, Number(req.body.maxAmount), nowISO()]);
+  const u = await requireAuth(req, res); if (!u) return;
+  await query('INSERT INTO top_limits(id,listing_id,buyer,max_amount,created_at) VALUES($1,$2,$3,$4,$5)', [uid(), req.body.listingId, u.name, Number(req.body.maxAmount), nowISO()]);
   res.json({ ok: true });
 });
 app.post('/api/reviews', async (req, res) => {
   // listingId comes in the body (the route has no :listingId param) — the old
   // code read req.params.listingId, which is undefined and crashed the server.
+  const u = await requireAuth(req, res); if (!u) return;
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.body.listingId]);
-  if (!l || l.winner !== req.body.reviewer) return res.json({ ok: false, error: 'only the winner can leave a score' });
+  if (!l || l.winner !== u.name) return res.json({ ok: false, error: 'only the winner can leave a score' });
   if (adHit(req.body.comment || '')) return res.json({ ok: false, error: AD_ERROR });
   await query('INSERT INTO reviews(id,listing_id,seller,reviewer,stars,comment,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
-    [uid(), l.id, l.seller, req.body.reviewer, Number(req.body.stars), req.body.comment || '', nowISO()]);
+    [uid(), l.id, l.seller, u.name, Number(req.body.stars), req.body.comment || '', nowISO()]);
   res.json({ ok: true });
 });
 app.get('/api/scorecard/:seller', async (req, res) => {
@@ -799,18 +1105,22 @@ app.get('/api/scorecard/:seller', async (req, res) => {
   res.json({ seller: req.params.seller, average: r && r.avg ? Number(r.avg).toFixed(1) : null, count: Number((r && r.n) || 0), reviews: rows });
 });
 app.post('/api/shows', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to schedule a show — your account is a buyer account' });
   if (adHit(req.body.title || '')) return res.json({ ok: false, error: AD_ERROR });
   const id = uid();
-  await query('INSERT INTO shows(id,seller,title,starts_at,created_at) VALUES($1,$2,$3,$4,$5)', [id, req.body.seller, req.body.title, req.body.startsAt, nowISO()]);
+  await query('INSERT INTO shows(id,seller,title,starts_at,created_at) VALUES($1,$2,$3,$4,$5)', [id, u.name, req.body.title, req.body.startsAt, nowISO()]);
   res.json({ ok: true, id });
 });
 app.get('/api/coming-up', async (req, res) => res.json(await query('SELECT * FROM shows WHERE starts_at > $1 ORDER BY starts_at ASC', [nowISO()])));
 // One Box Deal: biggest shipping once + $2 per extra item, paid once into escrow.
 app.post('/api/one-box', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const ids = req.body.listingIds || [];
   const items = [];
   for (const id of ids) { const l = await queryOne('SELECT * FROM listings WHERE id=$1', [id]); if (l) items.push(l); }
   if (!items.length) return res.json({ ok: false, error: 'no items' });
+  if (!items.every(l => l.winner === u.name)) return res.json({ ok: false, error: 'One Box is for your own wins only' });
   const seller = items[0].seller;
   if (!items.every(l => l.seller === seller)) return res.json({ ok: false, error: 'One Box is for wins from one seller only' });
   const itemTotal = items.reduce((s, l) => s + (l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0)), 0);
@@ -821,7 +1131,9 @@ app.post('/api/one-box', async (req, res) => {
 // Carrier is automatic from the listing's package size: USPS, except Big box
 // over 5 lb = UPS. A carrier sent in the request is ignored.
 app.post('/api/labels', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const l = req.body.listingId ? await queryOne('SELECT * FROM listings WHERE id=$1', [req.body.listingId]) : null;
+  if (l && !_sellerMatches(req, l)) return res.json({ ok: false, error: 'only the seller can get a label for this sale' });
   const carrier = l ? carrierFor(l.package_size) : 'USPS';
   const tracking = makeTracking(carrier);
   const code = 'LBL-' + uid().slice(0, 8).toUpperCase();
@@ -865,11 +1177,13 @@ app.get('/api/receipt/:listingId', async (req, res) => {
     videoReceipt: { listedTitle: l.title, isRandom: !!l.is_random, revealedItem: revealed, revealedNote: revealed ? 'Revealed live: ' + revealed : 'Random Item — revealed live on camera, seller to confirm what it was', sellerWasLive: !!l.seller_live, bids, chats } });
 });
 app.post('/api/refunds', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const b = req.body || {};
   if (!b.photoName) return res.json({ ok: false, error: 'a photo of the item is required' });
   if (!b.videoName) return res.json({ ok: false, error: 'a video of the item is required' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [b.listingId]);
   if (!l || !l.delivered_at) return res.json({ ok: false, error: 'refunds open only after delivery' });
+  if (u.name !== l.winner) return res.json({ ok: false, error: 'only the winner can ask for a refund on this sale' });
   // Refund window runs until the seller's payout date for this sale — the
   // same rule as the old 12-hour rule, applied to the longer hold. After the
   // payout date (money released to the seller) there is no refund.
@@ -879,7 +1193,7 @@ app.post('/api/refunds', async (req, res) => {
   const open = await queryOne("SELECT * FROM refunds WHERE listing_id=$1 AND status IN ('pending','awaiting_return','disputed')", [b.listingId]);
   if (open) return res.json({ ok: false, error: 'a refund request is already open for this sale — the seller is deciding' });
   await query('INSERT INTO refunds(id,listing_id,requester,reason,photo_name,video_name,status,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
-    [uid(), b.listingId, b.requester || 'Buyer', b.reason, b.photoName, b.videoName, 'pending', nowISO()]);
+    [uid(), b.listingId, u.name, b.reason, b.photoName, b.videoName, 'pending', nowISO()]);
   await query("UPDATE listings SET escrow_status='held_refund_pending' WHERE id=$1", [b.listingId]);
   res.json({ ok: true });
 });
@@ -908,7 +1222,8 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can decide on this refund' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (rf.status !== 'pending') return res.json({ ok: false, error: 'this refund has already been decided' });
   await expireRefundIfPast(l, rf);
   const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
@@ -919,7 +1234,7 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
     await query("UPDATE listings SET escrow_status='refunded' WHERE id=$1", [l.id]);
     await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
       [uid(), l.id, l.seller, 'Seller agreed to the refund without the item back — the refund is released from the seller\'s escrow money. The buyer keeps the item.', nowISO()]);
-    return res.json({ ok: true, choice: 'no_return', status: 'approved' });
+    return res.json({ ok: true, choice: 'no_return', status: 'approved', ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
   }
   if (choice === 'want_back') {
     const carrier = carrierFor(l.package_size);
@@ -933,7 +1248,7 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
       [uid(), l.id, carrier, tracking, code, nowISO()]);
     await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
       [uid(), l.id, l.seller, 'Seller wants the item back first — a tracked return label (' + carrier + ' ' + tracking + ') was sent to the buyer. No refund until the seller receives the item back. The return label cost ($' + cost.toFixed(2) + ') is the seller\'s cost, not the buyer\'s and not the owner\'s fees. Test label only — no real carrier connected yet.', nowISO()]);
-    return res.json({ ok: true, choice: 'want_back', status: 'awaiting_return', carrier, tracking, code, returnCost: cost });
+    return res.json({ ok: true, choice: 'want_back', status: 'awaiting_return', carrier, tracking, code, returnCost: cost, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
   }
   return res.json({ ok: false, error: 'choice must be no_return or want_back' });
 });
@@ -947,8 +1262,10 @@ app.post('/api/refunds/:id/choose', async (req, res) => {
 // the seller says arrived. Both are required — no video or no label picture,
 // no shipped mark.
 app.post('/api/refunds/:id/return-shipped', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
   const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
   if (!rf) return res.json({ ok: false, error: 'not found' });
+  if (u.name !== rf.requester) return res.json({ ok: false, error: 'only the buyer who asked for this refund can mark the return shipped' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'the seller has not asked for the item back' });
@@ -971,11 +1288,12 @@ app.post('/api/refunds/:id/confirm-receipt', async (req, res) => {
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can confirm they got the item back' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
   if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the buyer has not shipped the item back yet' });
   await releaseRefund(rf, l, 'seller_confirmed');
-  res.json({ ok: true, status: 'approved' });
+  res.json({ ok: true, status: 'approved', ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // Return scanned as DELIVERED - the buyer must not lose out if the seller
 // never taps "I got it back". The buyer or the owner can record it from the
@@ -984,6 +1302,14 @@ app.post('/api/refunds/:id/confirm-receipt', async (req, res) => {
 // needed. TEST MODE: no live carrier feed is connected yet, so delivery is
 // recorded from this tracking / mark-as-delivered step; at go-live a real
 // carrier delivery scan will do this automatically.
+// Return scanned as DELIVERED — 48-HOUR RULE (Kevin, 2026-11-18): recording
+// delivery only STARTS the 48-hour clock. It does NOT release the refund.
+// The refund releases only when the seller confirms receipt, the owner
+// rules a dispute in the buyer's favour, or the sweep auto-releases it 48
+// hours AFTER DELIVERY with no seller response. TEST MODE: no live carrier
+// feed is connected yet, so delivery is recorded from this tracking /
+// mark-as-delivered step; at go-live a real carrier delivery scan will do
+// this automatically.
 app.post('/api/refunds/:id/return-delivered', async (req, res) => {
   const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
   if (!rf) return res.json({ ok: false, error: 'not found' });
@@ -991,11 +1317,13 @@ app.post('/api/refunds/:id/return-delivered', async (req, res) => {
   if (!l) return res.json({ ok: false, error: 'not found' });
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
   if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the return has not been shipped back yet' });
+  if (rf.return_delivered_at) return res.json({ ok: false, error: 'this return was already marked delivered' });
   const tracking = String(req.body.tracking || rf.return_tracking || rf.return_label_tracking || '').trim().slice(0, 100);
   await query('UPDATE refunds SET return_tracking=$1, return_delivered_at=$2 WHERE id=$3', [tracking, nowISO(), rf.id]);
   const fresh = await queryOne('SELECT * FROM refunds WHERE id=$1', [rf.id]);
-  await releaseRefund(fresh, l, 'delivered');
-  res.json({ ok: true, status: 'approved', tracking, deliveredAt: fresh.return_delivered_at });
+  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,0,$5)',
+    [uid(), l.id, rf.requester || 'Buyer', 'Return scanned as DELIVERED (tracking ' + tracking + ') — the refund releases 48 hours after delivery if the seller does not confirm receipt first.', nowISO()]);
+  res.json({ ok: true, status: 'awaiting_return', tracking, deliveredAt: fresh.return_delivered_at, returnAutoReleaseAt: returnAutoReleaseAt(fresh), message: 'Return marked as delivered — the refund releases 48 hours after delivery if the seller does not confirm receipt first.' });
 });
 // ---------- Wrong-item dispute (Kevin, 2026-11-18) ----------
 // When a return is delivered / shipped back, the seller has 48 hours to
@@ -1023,7 +1351,8 @@ app.post('/api/refunds/:id/wrong-item', async (req, res) => {
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
   if (!l) return res.json({ ok: false, error: 'not found' });
-  if (req.body.seller !== l.seller) return res.json({ ok: false, error: 'only the seller can flag a wrong item' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
   if (rf.status !== 'awaiting_return') return res.json({ ok: false, error: 'this refund is not waiting for the item back' });
   if (!rf.return_shipped_at) return res.json({ ok: false, error: 'the buyer has not shipped the item back yet' });
   if (!req.body.photoName) return res.json({ ok: false, error: 'a photo of what actually arrived is required — the flag is refused without both a photo and a video' });
@@ -1032,7 +1361,7 @@ app.post('/api/refunds/:id/wrong-item', async (req, res) => {
     [String(req.body.photoName).slice(0, 200), String(req.body.videoName).slice(0, 200), nowISO(), rf.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, 'Seller flagged a wrong item sent back — the refund is PAUSED, the 48-hour auto-release is stopped, and the owner will decide. Seller proof of what arrived: photo ' + String(req.body.photoName).slice(0, 200) + ', video ' + String(req.body.videoName).slice(0, 200) + '.', nowISO()]);
-  res.json({ ok: true, status: 'disputed' });
+  res.json({ ok: true, status: 'disputed', ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // Owner decides a wrong-item dispute. decision 'correct' = the item sent
 // back IS the right item, so the claim was not upheld after review: the
@@ -1043,6 +1372,7 @@ app.post('/api/refunds/:id/wrong-item', async (req, res) => {
 // pays only because they asked for the item back - same rule) within 7 days,
 // or they get no refund.
 app.post('/api/refunds/:id/dispute-decide', async (req, res) => {
+  if (!requireOwner(req, res)) return;
   const rf = await queryOne('SELECT * FROM refunds WHERE id=$1', [req.params.id]);
   if (!rf) return res.json({ ok: false, error: 'not found' });
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [rf.listing_id]);
@@ -1083,12 +1413,15 @@ app.post('/api/refunds/:id/dispute-decide', async (req, res) => {
 });
 // ---------- Founding / waitlist / dashboard / tax / report ----------
 app.post('/api/founding/claim', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to claim a founding spot — your account is a buyer account' });
   const f = await foundingStatus();
   if (f.remaining <= 0) return res.json({ ok: false, error: 'founding spots are closed — 10/10 taken' });
-  const ex = await queryOne('SELECT * FROM founding WHERE seller=$1', [req.body.seller]);
+  const ex = await queryOne('SELECT * FROM founding WHERE seller=$1', [u.name]);
   if (ex) return res.json({ ok: false, error: 'already a founding seller' });
-  await query('INSERT INTO founding(id,seller,claimed_at) VALUES($1,$2,$3)', [uid(), req.body.seller, nowISO()]);
-  res.json({ ok: true, ...(await foundingStatus()) });
+  await query('INSERT INTO founding(id,seller,claimed_at) VALUES($1,$2,$3)', [uid(), u.name, nowISO()]);
+  const _st = await ensureSellerToken(u.name);
+  res.json({ ok: true, ...(await foundingStatus()), ...(_st ? { sellerToken: _st } : {}) });
 });
 // ---------- Automatic welcome email when someone joins the waitlist ----------
 // Joining the waitlist automatically puts them on the list AND tries to email
@@ -1175,8 +1508,18 @@ async function getLiveNoticePreview() {
     welcomePendingEmails: welcomePending.map(r => ({ name: r.name || '', email: r.email })),
     welcomeFailedEmails: welcomeFailed.map(r => ({ name: r.name || '', email: r.email })) };
 }
-app.get('/api/waitlist/live-notice', async (req, res) => res.json({ ok: true, ...(await getLiveNoticePreview()) }));
+app.get('/api/waitlist/live-notice', async (req, res) => {
+  // Without owner auth: count only — NEVER the emails list, mailto link,
+  // or the welcome pending/failed email lists.
+  if (!OWNER_PASSWORD) return res.status(403).json({ ok: false, error: 'owner password not set' });
+  if (!_ownerOk(req)) {
+    const p = await getLiveNoticePreview();
+    return res.json({ ok: true, count: p.count, welcomeSent: p.welcomeSent, welcomePending: p.welcomePending, welcomeFailed: p.welcomeFailed, resendConfigured: p.resendConfigured, sentAt: p.sentAt, sentMode: p.sentMode, sentCount: p.sentCount });
+  }
+  res.json({ ok: true, ...(await getLiveNoticePreview()) });
+});
 app.post('/api/waitlist/live-notice', async (req, res) => {
+  if (!requireOwner(req, res)) return;
   const b = req.body || {};
   const preview = await getLiveNoticePreview();
   const already = !!preview.sentAt;
@@ -1211,6 +1554,7 @@ app.get('/api/payout-tier/:seller', async (req, res) => {
   res.json({ seller: req.params.seller, ...t, note: 'Test mode — payout dates are tracked dates, not real bank transfers. No real payment processor is connected yet.' });
 });
 app.get('/api/dashboard', async (req, res) => {
+  if (!requireOwner(req, res)) return;
   const settings = await getSettings();
   const sold = await query("SELECT * FROM listings WHERE status='sold' AND escrow_status='released'");
   let fees = 0;
@@ -1277,6 +1621,7 @@ app.get('/api/dashboard', async (req, res) => {
   res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes });
 });
 app.post('/api/settings/tax', async (req, res) => {
+  if (!requireOwner(req, res)) return;
   const p = Number(req.body.percent);
   if (!p || p < 0 || p > 100) return res.json({ ok: false, error: 'percent must be 0–100' });
   await query('UPDATE settings SET tax_percent=$1 WHERE id=1', [p]);
