@@ -478,7 +478,6 @@ function _resetTokenForResponse(token) {
 // not. Sellers face the real gate at go-live: Stripe ID verification
 // before any payout.
 const DISPOSABLE_EMAIL_DOMAINS = ['mailinator.com', 'tempmail.com', '10minutemail.com', 'guerrillamail.com', 'sharklasers.com', 'yopmail.com', 'temp-mail.org', 'maildrop.cc', 'getnada.com', 'mohmal.com', 'throwawaymail.com', 'fakeinbox.com', 'trashmail.com', 'dispostable.com', 'mailnesia.com', 'mintemail.com', 'spamgourmet.com', 'mytemp.email', 'tempail.com', 'emailondeck.com', 'harakirimail.com', 'inboxbear.com', 'tmail.com', 'tempinbox.com', 'mailcatch.com'];
-const _signupChallenges = new Map(); // id -> {answer, expires}; one use only
 const _signupRate = new Map(); // ip -> {start, count}; 5 sign-ups per hour
 function _signupRateOk(ip) {
   const now = Date.now();
@@ -487,16 +486,6 @@ function _signupRateOk(ip) {
   b.count++;
   return b.count <= 5;
 }
-// Human check for signup: a simple sum. The answer lives on the server
-// for 10 minutes and is used once — a script posting straight at the
-// signup endpoint has no answer to send.
-app.get('/api/auth/challenge', async (req, res) => {
-  const a = 2 + Math.floor(Math.random() * 8), b = 2 + Math.floor(Math.random() * 8);
-  const id = uid();
-  _signupChallenges.set(id, { answer: a + b, expires: Date.now() + 10 * 60 * 1000 });
-  if (_signupChallenges.size > 500) { for (const [k, v] of _signupChallenges) if (v.expires < Date.now()) _signupChallenges.delete(k); }
-  res.json({ ok: true, id, question: `What is ${a} + ${b}?` });
-});
 app.post('/api/auth/signup', async (req, res) => {
   const b = req.body || {};
   const name = String(b.name || '').trim().slice(0, 100);
@@ -508,13 +497,6 @@ app.post('/api/auth/signup', async (req, res) => {
   if (String(b.website || b.url || '').trim()) return res.json({ ok: false, error: 'sign up failed — please try again' });
   const _domain = (email.split('@')[1] || '').toLowerCase();
   if (DISPOSABLE_EMAIL_DOMAINS.includes(_domain)) return res.json({ ok: false, error: 'use a real email address — temporary email addresses cannot sign up' });
-  // Human check: the challenge id + answer must match the server's record.
-  // The challenge is used once, right or wrong, so answers cannot be guessed
-  // against the same question over and over.
-  const _ch = _signupChallenges.get(String(b.challengeId || ''));
-  _signupChallenges.delete(String(b.challengeId || ''));
-  if (!_ch || _ch.expires < Date.now() || String(b.challengeAnswer || '').trim() === '') return res.json({ ok: false, error: 'answer the check question to sign up — it proves you are a person, not a script' });
-  if (Number(b.challengeAnswer) !== _ch.answer) return res.json({ ok: false, error: 'that answer to the check was not right — a new sum is shown above, try that one' });
   const password = String(b.password || '');
   const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
   const shippingAddress = String(b.shippingAddress || b.address || '').trim().slice(0, 500);
