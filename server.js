@@ -495,6 +495,12 @@ app.post('/api/auth/signup', async (req, res) => {
   // Honeypot: a hidden field real people never fill. A bot filling every
   // field trips it. The error stays vague on purpose.
   if (String(b.website || b.url || '').trim()) return res.json({ ok: false, error: 'sign up failed — please try again' });
+  // Human check at first sign-up only (Kevin, 2026-11-20): the sign-up
+  // form has an "I'm a real person" checkbox. The server refuses a
+  // signup without it, so a bot can't skip it by calling this endpoint
+  // directly. It is only for sign-up — sign-in and signed-in users
+  // never see it.
+  if (b.human !== true && b.human !== 'true') return res.json({ ok: false, error: 'tap the box to show you are a real person, then try again' });
   const _domain = (email.split('@')[1] || '').toLowerCase();
   if (DISPOSABLE_EMAIL_DOMAINS.includes(_domain)) return res.json({ ok: false, error: 'use a real email address — temporary email addresses cannot sign up' });
   const password = String(b.password || '');
