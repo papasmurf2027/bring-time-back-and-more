@@ -332,8 +332,12 @@ function drawQR(text,canvas){
 window._photoData='';
 function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const img=new Image();const rd=new FileReader();rd.onload=e=>{img.onload=()=>{const max=800;const sc=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);c.getContext('2d').drawImage(img,0,0,c.width,c.height);window._photoData=c.toDataURL('image/jpeg',0.8);const p=document.getElementById('sPhotoPrev');p.src=window._photoData;p.style.display='block';};img.src=e.target.result;};rd.readAsDataURL(f);}
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
+function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
+function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
+function agreeRules(){document.getElementById('sAgree').checked=true;var s=document.getElementById('agreeStatus');if(s)s.textContent='✓ You agreed to the Rules.';closeRulesModal();}
 async function createListing(){
   if(needSignIn())return;
+  if(!document.getElementById('sAgree').checked){openRulesModal();return;}
   const size=document.getElementById('sSize').value;
   const _sw=document.getElementById('sWheel');
   const wheelItems=_sw?(_sw.value||'').split('\n').map(s=>s.trim()).filter(Boolean):[];
@@ -346,6 +350,7 @@ async function createListing(){
 // insured shipping and Seller Agreement as the sell form above.
 async function createRandomItems(){
   if(needSignIn())return;
+  if(!document.getElementById('sAgree').checked){openRulesModal();return;}
   const size=document.getElementById('sSize').value;
   const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);

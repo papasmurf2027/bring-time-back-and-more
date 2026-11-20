@@ -76,7 +76,7 @@
 <label>Mode <select id="sMode"><option>Regular</option><option>Sudden Death</option></select></label>
 <p class="small">Regular: an outbid adds 10 seconds. Sudden Death: an outbid does NOT reset the timer.</p>
 <label><input type="checkbox" id="sInsured" style="width:auto"> Insured shipping (required)</label><br>
-<label><input type="checkbox" id="sAgree" style="width:auto"> I accept the Seller Agreement (required)</label><br>
+<input type="checkbox" id="sAgree" style="display:none"><button class="btn ghost" type="button" onclick="openRulesModal()">Read the Rules</button> <span id="agreeStatus" class="small">You must read the Rules and agree before you can list.</span><br>
 <label><input type="checkbox" id="sNoCom" style="width:auto"> No cancellation / no refund for change of mind — all sales final on that</label><p class="small">Tick this if you want this listing to be no cancellation and no refund for change of mind. The buyer bids knowing that — bidding is their responsibility. A refund is still given for a legit reason only: not as described, damaged, wrong item, defective, or never arrived.</p>
 <button class="btn" onclick="createListing()">List it</button><p id="sellMsg"></p>
 <div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:14px">
@@ -114,7 +114,7 @@
 <label>Coming Up — seller <input id="cSeller"></label><label>Show title <input id="cTitle"></label><label>Starts at <input id="cWhen" type="datetime-local"></label><button class="btn" onclick="makeShow()">Schedule show</button><div id="shows"></div><div id="savedShows"></div>
 </section>
 
-<section class="card"><h2>Rules — short version</h2><ol>
+<section class="card" id="rulesSec"><h2>Rules — short version</h2><ol>
 <li><b>Refunds.</b> Owner is not responsible for refunds. Refunds only until the seller is paid out — the refund window closes on the payout date for that sale (12 hours for trusted/top small items, 3 days or 7 days for longer payout holds), for a legit reason only (not as described, damaged, wrong item, defective, never arrived). After the payout date, no refund. "Changed my mind" is not accepted. If a refund is asked, it is up to the seller: refund without the item back, or ask for the item back first — then no refund until the seller receives it, or the return is scanned as delivered. When the return is scanned as DELIVERED, the refund releases on its own 48 hours after delivery if the seller does not confirm receipt first — the seller does not have to tap anything, but it does not release right away, so the seller cannot stall it forever and the buyer does not lose out. In test mode delivery is recorded from the tracking / mark-as-delivered step — no live carrier feed yet; at go-live a real carrier delivery scan will do this automatically.</li>
 <li><b>Shipping.</b> Shipping must be insured. Buyers pay shipping — the price is set by package size: Small $4.47, Medium $4.85, Large $5.25, XL $6.75, Box 1–5 lb $7.75, Big box over 5 lb $9.69+, Flat Rate box $12.99, Card envelope $0.99. Carrier is automatic: everything ships via USPS, except Big box over 5 lb, which ships via UPS. No FedEx.</li>
 <li><b>Escrow.</b> Winner's payment is checked first (test check only — no real processor yet) and held in escrow. Seller is paid after delivery, on their payout tier — see the payout rule below.</li>
@@ -140,4 +140,5 @@
 </main>
 <footer>© 2026 Bring Time Back and More. All rights reserved.<br>™ Bring Time Back and More — name and logo are trademarks of Bring Time Back and More. Do not use them to advertise another site.<br>Do not copy this name, logo, design, text or layout without permission.<br><span class="small">™ means the name is claimed as a trademark. It is not a registered ® trademark yet — a USPTO filing is a later step, not done yet. This site's code can only block advertising on this site; it cannot stop another site using the name elsewhere — that takes a trademark filing and takedown letters.</span><br><span class="small">Test mode — no real money, no real payment processor connected yet.</span></footer>
 <div id="detail"></div>
+<div id="rulesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:50;overflow:auto"><div class="card" style="max-width:700px;margin:40px auto"><h2>Rules — read them, then agree</h2><div id="rulesModalBody"></div><button class="btn" onclick="agreeRules()">I agree to the Rules</button> <button class="btn ghost" onclick="closeRulesModal()">Close</button></div></div>
 <script src="/app.js"></script></body></html>
