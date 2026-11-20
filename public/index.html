@@ -20,12 +20,12 @@
 <line x1="138" y1="354" x2="182" y2="354" stroke="#f5c542" stroke-width="3" stroke-linecap="round"/>
 </svg></div>
 <div class="bgpattern"></div>
-<header><img src="/logo.jpg" alt="Bring Time Back and More — ornate gold pocket watch melting into an hourglass"><div><h1>Bring Time Back and More</h1><p class="tag">Buy it. Sell it. That's it.</p></div></header>
+<header><img src="/logo.jpg" alt="Bring Time Back and More — ornate gold pocket watch melting into an hourglass"><div><h1>Bring Time Back and More</h1><p class="tag">Buy it. Sell it. That's it.</p></div><button class="btn ghost" id="profileBtn" style="display:none;margin-left:auto" onclick="show('profile')">My Profile</button></header>
 <div class="banner">⚠️ PRE-LAUNCH / TEST MODE — No real money moves here yet. No real payments, no buyer is charged, no seller is paid. Bids and sales are practice only. <b>Do not ship a real item in test.</b></div>
 <main>
 <section class="hero"><h2>Buy it. Sell it. That's it.</h2><p>Live auctions, the Time Wheel giveaway, and a store — all in one place.</p></section>
 
-<section class="card" id="authSec"><h2>Your account</h2><p class="small" id="authStatus">Not signed in — sign up or sign in to bid, buy, list or chat.</p>
+<section class="card" id="authSec"><h2>Your account</h2><p id="authStatus">Not signed in — sign up or sign in to bid, buy, list or chat.</p><button class="btn" id="authProfileBtn" style="display:none" onclick="show('profile')">My Profile</button>
 <label>Username — this is what people see, not your real name <input id="aName" placeholder="Pick a username"></label>
 <label>Email <input id="aEmail" type="email" placeholder="you@example.com"></label>
 <label style="display:none">Website <input id="aWebsite" tabindex="-1" autocomplete="off"></label>
@@ -44,6 +44,8 @@
 <button class="btn ghost" onclick="changeSecQ()">Change security question</button>
 <button class="btn ghost" onclick="signOutEverywhere()">Sign out everywhere</button>
 <p id="authMsg" class="small"></p></section>
+<section class="card" id="profileSec" style="display:none"><h2>My Profile</h2><div id="profileBody"></div>
+<button class="btn" onclick="show('sell')">Sell Something</button> <button class="btn ghost" onclick="show('buy')">Browse — buy something</button> <button class="btn ghost" onclick="signOut()">Sign out</button></section>
 <section class="card"><h2>List in 3 steps. Bid in 1 tap.</h2>
 <p>Sellers: 1) List it &nbsp; 2) Buyers bid &nbsp; 3) Get paid after delivery — 12 hours to 7 days, depending on your seller tier.<br>Buyers: 1) Find it &nbsp; 2) Bid or Buy Now &nbsp; 3) Pay, get it, done.</p>
 <button class="btn" onclick="show('sell')">Sell Something</button>

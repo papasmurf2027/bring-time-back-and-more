@@ -40,9 +40,14 @@ async function syncSellerToken(){
 }
 function renderAuth(){
   const el=document.getElementById('authStatus');
-  if(el)el.textContent=currentUser?('Signed in as '+currentUser.name+' ('+currentUser.role+') — you can bid, buy and sell.'):'Not signed in — sign up or sign in to bid, buy, list or chat.';
+  // Signed-in state is shown big and clear, not small — Kevin, 2026-11-20:
+  // the small "Signed in as" line made it look like you weren't signed in.
+  if(el)el.innerHTML=currentUser?('<b>You are signed in as '+escHtml(currentUser.name)+'</b> ('+escHtml(currentUser.role)+')'):'Not signed in — sign up or sign in to bid, buy, list or chat.';
+  const pb=document.getElementById('profileBtn'); if(pb)pb.style.display=currentUser?'':'none';
+  const apb=document.getElementById('authProfileBtn'); if(apb)apb.style.display=currentUser?'':'none';
   const ss=document.getElementById('sSeller'); if(ss&&currentUser)ss.value=currentUser.name;
-  const ad=document.getElementById('aAddr'); if(ad)ad.value=currentUser?(currentUser.shippingAddress||''):'';
+  const ad=document.getElementById('aAddr'); if(ad)ad.value=currentUser?(currentUser.shippingAddress||''):''; 
+  if(!currentUser){const ps=document.getElementById('profileSec'); if(ps)ps.style.display='none';}
 }
 function loadSession(){try{const u=localStorage.getItem('btb_user');if(u)currentUser=JSON.parse(u);}catch(e){}}
 async function authMe(){
@@ -64,14 +69,14 @@ async function signUp(){
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
     return;
   }
-  setSession(r.user,r.sessionToken);authMsg('Signed up — welcome, '+r.user.name+'.');
+  setSession(r.user,r.sessionToken);authMsg('Signed up — welcome, '+r.user.name+'.');show('profile');
 }
 async function signIn(){
   const r=await j('/api/auth/login',{email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value});
   if(!r.ok){authMsg('Error: '+r.error);return;}
-  setSession(r.user,r.sessionToken);authMsg('Signed in as '+r.user.name+'.');
+  setSession(r.user,r.sessionToken);authMsg('Signed in as '+r.user.name+'.');show('profile');
 }
-async function signOut(){try{await j('/api/auth/logout');}catch(e){}setSession(null);authMsg('Signed out.');}
+async function signOut(){try{await j('/api/auth/logout');}catch(e){}setSession(null);authMsg('Signed out.');const a=document.getElementById('authSec');if(a)a.scrollIntoView({behavior:'smooth',block:'start'});}
 async function saveAddress(){if(needSignIn())return;const r=await j('/api/auth/address',{address:document.getElementById('aAddr').value});if(!r.ok){authMsg('Error: '+r.error);return;}if(currentUser)currentUser.shippingAddress=r.shippingAddress;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}authMsg(r.shippingAddress?('Default shipping address saved — this is your main address now, and it counts for future buys. Items you already won still ship to the address on file when you won them.'):'Default shipping address cleared — add one before you bid or buy.');}
 async function forgotPw(){
   const email=document.getElementById('aEmail').value||prompt('Email for your account?');
@@ -107,7 +112,31 @@ async function oj(u,o){let r=await j(u,o,ownerHeaders());if(r&&!r.ok&&(r.error==
 let cats=['All','Watches','Clothes','Shoes','Electronics','Collectibles','Home','Fashion','Art','Sports','Toys','Other'];
 let curCat='All', curType='';
 async function j(u,o,headers){const r=await fetch(u,o?{method:'POST',headers:Object.assign({'Content-Type':'application/json'},sessionHeaders(),headers||{}),body:JSON.stringify(o)}:{headers:Object.assign({},sessionHeaders(),headers||{})});return r.json();}
-function show(w){document.getElementById('sellSec').style.display=w==='sell'?'block':'none';document.getElementById('dashSec').style.display=w==='dash'?'block':'none';if(w==='buy'){curType='';load();}if(w==='store'){curType='buy_now';load();}if(w==='dash')loadDash();const target=w==='sell'?document.getElementById('sellSec'):w==='dash'?document.getElementById('dashSec'):document.getElementById('list');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}if(w==='sell'){const f=document.getElementById('sSeller');if(f){if(currentUser)f.value=currentUser.name;setTimeout(()=>f.focus(),400);}}}
+function show(w){document.getElementById('sellSec').style.display=w==='sell'?'block':'none';document.getElementById('dashSec').style.display=w==='dash'?'block':'none';document.getElementById('profileSec').style.display=w==='profile'?'block':'none';if(w==='buy'){curType='';load();}if(w==='store'){curType='buy_now';load();}if(w==='dash')loadDash();if(w==='profile')loadProfile();const target=w==='sell'?document.getElementById('sellSec'):w==='dash'?document.getElementById('dashSec'):w==='profile'?document.getElementById('profileSec'):document.getElementById('list');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}if(w==='sell'){const f=document.getElementById('sSeller');if(f){if(currentUser)f.value=currentUser.name;setTimeout(()=>f.focus(),400);}}}
+// My Profile (Kevin, 2026-11-20): one page that shows you're signed in,
+// who you are, what you bought and what you sold — each with its stage:
+// processing, sent, delivered, finalized.
+function stageLabel(s){return s==='processing'?'Processing':s==='sent'?'Sent':s==='delivered'?'Delivered':s==='finalized'?'Finalized':s==='refunded'?'Refunded':s;}
+async function loadProfile(){
+  const box=document.getElementById('profileBody'); if(!box)return;
+  if(!currentUser){box.innerHTML='<p><b>You are not signed in.</b></p><p>Sign up or sign in in Your account below to see your profile.</p>';return;}
+  const u=currentUser;
+  let act={bought:[],sold:[]};
+  try{const r=await j('/api/my-activity'); if(r&&r.ok)act=r;}catch(e){}
+  const roleName=u.role==='both'?'Buyer and seller':u.role==='seller'?'Seller':'Buyer';
+  const itemRow=(l,other)=>{
+    const price=l.price?('$'+l.price):'FREE';
+    return `<p><b>${escHtml(l.title)}</b> — ${price}${l.shipping?(' + $'+l.shipping+' shipping'):''} • ${escHtml(other)} • <span class="badge ${l.stage==='finalized'?'green':l.stage==='delivered'?'gold':''}">${stageLabel(l.stage)}</span>${l.tracking?(' • Tracking '+escHtml(l.tracking)):''} <button class="btn ghost" onclick="openItem('${l.id}')">Open</button></p>`;
+  };
+  box.innerHTML=`
+    <p style="font-size:20px;margin:0 0 4px"><b>You're signed in as ${escHtml(u.name)}</b></p>
+    <p>${roleName} • ${escHtml(u.email)}</p>
+    <p><b>Real name and shipping address:</b> ${u.shippingAddress?escHtml(u.shippingAddress):'— not set yet. Add it in Your account below.'}</p>
+    <h3>What I bought (${act.bought.length})</h3>
+    ${act.bought.length?act.bought.map(l=>itemRow(l,'from '+l.seller)).join(''):'<p class="small">Nothing bought yet.</p>'}
+    <h3>What I sold (${act.sold.length})</h3>
+    ${act.sold.length?act.sold.map(l=>itemRow(l,'to '+(l.winner||'—'))).join(''):'<p class="small">Nothing sold yet.</p>'}`;
+}
 async function load(){
   const o=await j('/api/overview');
   document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. 0% until it goes live, then 5% forever. Normal fee 10%.`;
