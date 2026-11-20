@@ -682,6 +682,11 @@ async function spinWheelFor(l) {
   const tracking = l.tracking || makeTracking(carrier);
   await query('UPDATE listings SET wheel_landed_item=$1, wheel_landed_at=$2, wheel_spun=1, status=$3, winner=$4, winner_user_id=$5, winner_address=$6, payment_status=$7, tracking=$8, carrier=$9 WHERE id=$10',
     [landed.name, nowISO(), 'sold', landed.name, landed.user_id || null, winnerAddress, 'free', tracking, carrier, l.id]);
+  // A free win gets a receipt too (total $0 — winner pays nothing, seller
+  // covers shipping), so it shows on the winner's and seller's profile.
+  const receiptNo = 'BTB-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000);
+  await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+    [uid(), l.id, receiptNo, 0, 0, 0, nowISO()]);
   const exLabel = await queryOne('SELECT * FROM labels WHERE listing_id=$1', [l.id]);
   if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
     [uid(), l.id, carrier, tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
@@ -1660,9 +1665,20 @@ async function receiptFor(l, req) {
     videoReceipt: { listedTitle: l.title, isRandom: !!l.is_random, revealedItem: revealed, revealedNote: revealed ? 'Revealed live: ' + revealed : 'Random Item — revealed live on camera, seller to confirm what it was', sellerWasLive: !!l.seller_live, bids, chats } };
 }
 app.get('/api/receipt/:listingId', async (req, res) => {
-  const r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [req.params.listingId]);
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.listingId]);
-  if (!r || !l) return res.json({ ok: false, error: 'no receipt yet — sale has not completed' });
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  let r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [req.params.listingId]);
+  if (!r) {
+    if (l.status !== 'sold') return res.json({ ok: false, error: 'no receipt yet — sale has not completed' });
+    // Sold but no receipt row (a free giveaway won before free wins got
+    // receipts) — make one from the listing so the receipt still shows.
+    const receiptNo = 'BTB-' + new Date().toISOString().slice(0, 10).replace(/-/g, '') + '-' + String(Math.floor(Math.random() * 9000) + 1000);
+    const amount = l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0);
+    const ship = l.payment_status === 'free' ? 0 : (l.shipping || 0);
+    await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
+      [uid(), l.id, receiptNo, amount, ship, amount + ship, nowISO()]);
+    r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
+  }
   // A Time Wheel receipt names the item the wheel landed on — that is what
   // the winner gets — not just the wheel's title.
   const landed = l.type === 'wheel' && l.wheel_landed_item ? l.wheel_landed_item : null;
