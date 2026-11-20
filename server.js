@@ -1126,6 +1126,13 @@ app.post('/api/listings/:id/enter', async (req, res) => {
   if (l.status !== 'live') return res.json({ ok: false, error: 'entries are closed — this giveaway is over' });
   if (l.ends_at && new Date(l.ends_at) <= new Date()) return res.json({ ok: false, error: 'entries are closed — the timer ran out' });
   if (l.wheel_spun) return res.json({ ok: false, error: 'the wheel has already spun' });
+  // You have to be in the room to get in the giveaway (Kevin, 2026-11-19):
+  // entry needs a fresh presence check-in for this room — the same 15-second
+  // check-in that keeps a room in Live Now. Opening the room starts it, so
+  // anyone actually watching can enter; nobody can enter from the main page.
+  const _inRoom = await queryOne('SELECT 1 AS x FROM room_presence WHERE listing_id=$1 AND last_seen>=$2 AND (user_id=$3 OR name=$4) LIMIT 1',
+    [l.id, new Date(Date.now() - 60000).toISOString(), u.id, u.name]);
+  if (!_inRoom) return res.json({ ok: false, error: 'you have to be in the room to get in the giveaway — open the room first, then enter' });
   if (_needsAddress(u)) return res.json({ ok: false, error: ADDRESS_REQUIRED_ERROR });
   const ex = await queryOne('SELECT * FROM wheel_entries WHERE listing_id=$1 AND user_id=$2', [l.id, u.id]);
   if (ex) return res.json({ ok: false, error: 'you are already on the wheel — one entry per person' });
@@ -1473,10 +1480,36 @@ app.post('/api/listings/:id/accept-offer', async (req, res) => {
   res.json({ ok: true, amount: l.buy_now_offer });
 });
 // ---------- Keep Track / Free Drops / Top Limit / Scorecard / Coming Up ----------
+// ---------- Keep Track — followers and following, both ways (Kevin, 2026-11-19) ----------
+// Anyone can keep track of anyone — buyer or seller, either way round. The
+// follows table stores it as follower name -> followed name. A seller's
+// followers see them marked live in Live Now, so it's easy for a seller to
+// let people know they're live.
 app.post('/api/follow', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
-  await query('INSERT INTO follows(id,buyer,seller,created_at) VALUES($1,$2,$3,$4)', [uid(), u.name, req.body.seller, nowISO()]);
-  res.json({ ok: true, message: 'Now keeping track of ' + req.body.seller });
+  const name = String(req.body.seller || '').trim();
+  if (!name) return res.json({ ok: false, error: 'who do you want to keep track of?' });
+  if (name === u.name) return res.json({ ok: false, error: 'you cannot keep track of yourself' });
+  const target = await queryOne('SELECT * FROM users WHERE name=$1', [name]);
+  if (!target) return res.json({ ok: false, error: 'no account with that name' });
+  const ex = await queryOne('SELECT * FROM follows WHERE buyer=$1 AND seller=$2', [u.name, name]);
+  if (ex) return res.json({ ok: true, message: 'Already keeping track of ' + name });
+  await query('INSERT INTO follows(id,buyer,seller,created_at) VALUES($1,$2,$3,$4)', [uid(), u.name, name, nowISO()]);
+  res.json({ ok: true, message: 'Now keeping track of ' + name });
+});
+app.post('/api/unfollow', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const name = String(req.body.seller || '').trim();
+  await query('DELETE FROM follows WHERE buyer=$1 AND seller=$2', [u.name, name]);
+  res.json({ ok: true, message: 'Stopped keeping track of ' + name });
+});
+app.get('/api/followers/:name', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const rows = await query('SELECT * FROM follows WHERE seller=$1', [req.params.name]);
+  // The count is public — it shows in the room. The names are only for the
+  // person being followed (and the owner).
+  const mine = _ownerOk(req) || u.name === req.params.name;
+  res.json({ ok: true, name: req.params.name, count: rows.length, followers: mine ? rows.map(r => r.buyer) : [] });
 });
 app.get('/api/following/:buyer', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
@@ -1549,6 +1582,25 @@ app.post('/api/shows', async (req, res) => {
   res.json({ ok: true, id });
 });
 app.get('/api/coming-up', async (req, res) => res.json(await query('SELECT * FROM shows WHERE starts_at > $1 ORDER BY starts_at ASC', [nowISO()])));
+app.post('/api/shows/:id/save', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const s = await queryOne('SELECT * FROM shows WHERE id=$1', [req.params.id]);
+  if (!s) return res.json({ ok: false, error: 'no such show' });
+  const ex = await queryOne('SELECT * FROM saved_shows WHERE user_id=$1 AND show_id=$2', [u.id, s.id]);
+  if (ex) { await query('DELETE FROM saved_shows WHERE user_id=$1 AND show_id=$2', [u.id, s.id]); return res.json({ ok: true, saved: false }); }
+  await query('INSERT INTO saved_shows(id,user_id,show_id,created_at) VALUES($1,$2,$3,$4)', [uid(), u.id, s.id, nowISO()]);
+  res.json({ ok: true, saved: true });
+});
+app.get('/api/saved-shows', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const rows = await query('SELECT * FROM saved_shows WHERE user_id=$1 ORDER BY created_at ASC', [u.id]);
+  const out = [];
+  for (const r of rows) {
+    const s = await queryOne('SELECT * FROM shows WHERE id=$1', [r.show_id]);
+    if (s && s.starts_at > nowISO()) out.push(s);
+  }
+  res.json(out);
+});
 // One Box Deal: biggest shipping once + $2 per extra item, paid once into escrow.
 app.post('/api/one-box', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
