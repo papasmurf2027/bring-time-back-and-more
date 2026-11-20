@@ -59,11 +59,12 @@ async function authMe(){
   syncSellerToken();
 }
 function authMsg(t){const m=document.getElementById('authMsg');if(m)m.textContent=t||'';}
-function secQValue(){const sel=document.getElementById('aSecQ');if(!sel)return '';if(sel.value==='__custom'){const c=document.getElementById('aSecQCustom');return c?c.value:'';}return sel.value;}
 async function signUp(){
-  // No human check (Kevin, 2026-11-20): the sum and the checkbox are both
-  // gone — just fill in the form and tap Sign up.
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:''});
+  // No security question at sign-up (Kevin, 2026-11-20): it only comes
+  // up when you forget your password. A signed-in user can set one
+  // later with "Change security question" if they want to reset their
+  // own password; without one, a forgotten password is owner-reset only.
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:''});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
