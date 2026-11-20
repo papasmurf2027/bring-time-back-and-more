@@ -126,8 +126,35 @@ async function loadProfile(){
   const roleName=u.role==='both'?'Buyer and seller':u.role==='seller'?'Seller':'Buyer';
   const itemRow=(l,other)=>{
     const price=l.price?('$'+l.price):'FREE';
-    return `<p><b>${escHtml(l.title)}</b> — ${price}${l.shipping?(' + $'+l.shipping+' shipping'):''} • ${escHtml(other)} • <span class="badge ${l.stage==='finalized'?'green':l.stage==='delivered'?'gold':''}">${stageLabel(l.stage)}</span>${l.tracking?(' • Tracking '+escHtml(l.tracking)):''} <button class="btn ghost" onclick="openItem('${l.id}')">Open</button></p>`;
+    return `<p><b>${escHtml(l.title)}</b> — ${price}${l.shipping?(' + $'+l.shipping+' shipping'):''} • ${escHtml(other)} • <span class="badge ${l.stage==='finalized'?'green':l.stage==='delivered'?'gold':''}">${stageLabel(l.stage)}</span>${l.tracking?(' • Tracking '+escHtml(l.tracking)):''} <button class="btn ghost" onclick="openItem('${l.id}')">Open</button> <button class="btn ghost" onclick="showReceipt('${l.id}')">Receipt</button></p>`;
   };
+// Receipt + video receipt for one sale, shown on My Profile (Kevin,
+// 2026-11-20). The video receipt is the written record of the live show —
+// item as listed, every bid, the room chat, whether the seller was live —
+// because the live video itself is not recorded.
+async function showReceipt(id){
+  const box=document.getElementById('receiptBox'); if(!box)return;
+  box.innerHTML='<p>Loading receipt…</p>';
+  const r=await oj('/api/receipt/'+id);
+  if(!r.ok){box.innerHTML='<p>Error: '+escHtml(r.error||'no receipt yet')+'</p>';return;}
+  const vr=r.videoReceipt||{};
+  box.innerHTML=`
+    <div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:12px">
+      <h3 style="margin-top:0">Receipt ${escHtml(r.receiptNo)}</h3>
+      <p><b>${escHtml(r.item)}</b><br>
+      Seller: ${escHtml(r.seller)} • Buyer: ${escHtml(r.winner)}<br>
+      Winning bid: $${r.winningBid} • Shipping: $${r.shipping} • Total: <b>$${r.total}</b><br>
+      Date won: ${new Date(r.dateWon).toLocaleString()} • Seller was live: ${r.sellerLive?'Yes':'No'} • Bids: ${r.bidCount}</p>
+      <h3>Video receipt — the live-room record</h3>
+      <p class="small">This is the written record of the live show — the item as listed, every bid, and the room chat. The live video itself is not recorded.</p>
+      <p><b>Listed as:</b> ${escHtml(vr.listedTitle||'')}</p>
+      ${vr.revealedItem?`<p><b>Revealed live:</b> ${escHtml(vr.revealedItem)}</p>`:''}
+      ${vr.bids&&vr.bids.length?`<p><b>Bid history</b><br>${vr.bids.map(b=>escHtml(b.bidder)+' — $'+b.amount+' — '+new Date(b.created_at).toLocaleString()).join('<br>')}</p>`:'<p>No bids recorded.</p>'}
+      ${vr.chats&&vr.chats.length?`<p><b>Room chat</b><br>${vr.chats.map(c=>escHtml(c.name)+(c.is_seller?' (seller)':'')+': '+escHtml(c.message)).join('<br>')}</p>`:'<p>No chat messages.</p>'}
+      <button class="btn ghost" onclick="document.getElementById('receiptBox').innerHTML=''">Close receipt</button>
+    </div>`;
+  box.scrollIntoView({behavior:'smooth',block:'start'});
+}
   box.innerHTML=`
     <p style="font-size:20px;margin:0 0 4px"><b>You're signed in as ${escHtml(u.name)}</b></p>
     <p>${roleName} • ${escHtml(u.email)}</p>
