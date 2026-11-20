@@ -55,17 +55,13 @@ async function authMe(){
 }
 function authMsg(t){const m=document.getElementById('authMsg');if(m)m.textContent=t||'';}
 function secQValue(){const sel=document.getElementById('aSecQ');if(!sel)return '';if(sel.value==='__custom'){const c=document.getElementById('aSecQCustom');return c?c.value:'';}return sel.value;}
-async function loadChallenge(){
-  const q=document.getElementById('aChallengeQ'); if(!q)return;
-  try{const r=await fetch('/api/auth/challenge').then(x=>x.json()); if(r.ok){window._challengeId=r.id;q.textContent=r.question;} else q.textContent='Check could not load — reload the page and try again.';}catch(e){q.textContent='Check could not load — reload the page and try again.';}
-}
 async function signUp(){
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',challengeId:window._challengeId||'',challengeAnswer:document.getElementById('aChallengeA')?document.getElementById('aChallengeA').value:''});
-  loadChallenge();
+  // Checkbox check (Kevin, 2026-11-20): the sum check is gone — a ticked
+  // box proves you're a person. The server checks it too.
+  const hc=document.getElementById('aHumanCheck');
+  if(!hc||!hc.checked){authMsg('Error: tick the box to prove you are a person — it shows you are not a script');const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});return;}
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',humanCheck:true});
   if(!r.ok){
-    // The check question changes after every try, so the answer just typed
-    // is stale — clear it so it can't be sent again by mistake.
-    const ca=document.getElementById('aChallengeA'); if(ca)ca.value='';
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
     return;
@@ -868,7 +864,7 @@ function copyLiveEmails(){
 }
 async function setTax(){const r=await oj('/api/settings/tax',{percent:Number(document.getElementById('taxPct').value)});alert(r.ok?'Tax % set to '+r.taxPercent:'Error: '+r.error);loadDash();}
 document.getElementById('sCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
-load(); loadSession(); renderAuth(); authMe(); loadChallenge(); setInterval(load,15000);
+load(); loadSession(); renderAuth(); authMe(); setInterval(load,15000);
 // Owner dashboard is NOT listed on the site — only the owner opens it, by adding ?owner to the site address, then entering the owner password. Buyers and sellers never see it.
 (function(){const q=new URLSearchParams(location.search);if(q.has('owner'))setTimeout(()=>show('dash'),600);})();
 // A scanned QR code opens this exact sold item: ?i=<listing id>&r=<receipt>&t=<tracking>

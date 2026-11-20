@@ -37,8 +37,7 @@
 <p class="small">You need this answer to reset your password. It is stored scrambled, never as plain text, and never shown to anyone — not even the owner.</p>
 <label>Default shipping address — your main address <input id="aAddr" placeholder="Street, town/city, state, ZIP"></label><p class="small">This is your main/default shipping address — it is the one used when you bid or buy. You can change it any time when you are signed in, and the change counts for future buys only. An item you already won always ships to the address that was on file when you won it.</p>
 <button class="btn ghost" onclick="saveAddress()">Save shipping address</button><br>
-<p class="small"><b>Check — prove you're a person:</b> <span id="aChallengeQ">Loading…</span></p>
-<label>Your answer to the check above <input id="aChallengeA" type="number" placeholder="Type the answer to the sum above"></label>
+<label><input type="checkbox" id="aHumanCheck" style="width:auto"> I'm a person, not a robot</label>
 <button class="btn" onclick="signUp()">Sign up</button>
 <button class="btn ghost" onclick="signIn()">Sign in</button>
 <button class="btn ghost" onclick="signOut()">Sign out</button>
