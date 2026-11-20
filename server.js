@@ -974,7 +974,7 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   const noCom = (b.noChangeOfMind || b.no_change_of_mind) ? 1 : 0;
   await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random,seller_user_id,no_change_of_mind)
     VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20,$21,$22)`,
-    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), b.fixedPrice ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
+    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), (type === 'buy_now' && b.fixedPrice) ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
   return id;
 }
 app.post('/api/listings', async (req, res) => {
@@ -1478,26 +1478,16 @@ app.get('/api/listings/:id/signal', async (req, res) => {
   res.json(rows.filter(r => r.sender === u.name || r.recipient === u.name));
 });
 app.post('/api/listings/:id/buy-now-offer', async (req, res) => {
-  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
-  if (!l || (l.type !== 'auction' && l.type !== 'wheel')) return res.json({ ok: false, error: 'offers in chat are for auctions only' });
-  if (!await requireSellerFor(req, res, l)) return;
-  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
-  await query('UPDATE listings SET buy_now_offer=$1, buy_now_offer_by=$2 WHERE id=$3', [Number(req.body.amount), l.seller, l.id]);
-  await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-    [uid(), l.id, l.seller, `Buy It Now offer: $${req.body.amount} — accept it in chat and the auction ends at that price.`, nowISO()]);
-  res.json({ ok: true, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
+  // Buy It Now offers on auctions are gone (Kevin, 2026-11-20): an auction
+  // must run to the end — nobody can buy it outright before the auction is
+  // done, because that is not fair to the bidders. A fixed price only
+  // lives in the Store — a buyer who wants a fixed price goes to the
+  // seller's Store instead.
+  return res.json({ ok: false, error: 'Buy It Now offers are not used on auctions — a fixed price only lives in the Store. Visit the seller\'s Store for fixed-price items.' });
 });
 app.post('/api/listings/:id/accept-offer', async (req, res) => {
-  const u = await requireAuth(req, res); if (!u) return;
-  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
-  if (!l || !l.buy_now_offer) return res.json({ ok: false, error: 'no Buy It Now offer in chat' });
-  if (l.status !== 'live') return res.json({ ok: false, error: 'this auction is not live any more' });
-  if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'offers in chat are for auctions only' });
-  // The seller cannot accept their own offer (2026-11-19 fix).
-  if (_sellerMatches(req, l)) return res.json({ ok: false, error: 'the seller cannot accept their own offer' });
-  await query("UPDATE listings SET status='ended', winner=$1, winner_user_id=$2, current_bid=$3, payment_status='awaiting_payment', escrow_status='not_started', escrow_amount=0 WHERE id=$4",
-    [u.name, u.id, l.buy_now_offer, l.id]);
-  res.json({ ok: true, amount: l.buy_now_offer });
+  // No Buy It Now offers exist any more (Kevin, 2026-11-20) — see above.
+  return res.json({ ok: false, error: 'Buy It Now offers are not used on auctions — a fixed price only lives in the Store.' });
 });
 // ---------- Keep Track / Free Drops / Top Limit / Scorecard / Coming Up ----------
 // ---------- Keep Track — followers and following, both ways (Kevin, 2026-11-19) ----------
