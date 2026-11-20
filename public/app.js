@@ -124,7 +124,6 @@ async function load(){
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">Status: ${escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
-  const d=await j('/api/drops'); document.getElementById('drops').innerHTML=d.map(x=>`<p>Free Drop: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.status)} ${x.winner?'winner: '+escHtml(x.winner):''}</p>`).join('');
   const s=await j('/api/coming-up');
   let savedShows=[]; if(currentUser){try{const sv=await j('/api/saved-shows'); if(Array.isArray(sv))savedShows=sv;}catch(e){}}
   const saved=new Set(savedShows.map(x=>x.id));
@@ -795,7 +794,6 @@ async function loadKeepTrack(){
   box.innerHTML=`<p><b>People you're keeping track of (${mine.length})</b>${mine.length?'<br>'+mine.map(x=>`${escHtml(x.seller)}${x.liveNow?' — <span class="badge">🔴 LIVE NOW</span>':''}${x.nextShow?' — next show '+escHtml(x.nextShow):''} <button class="btn ghost" onclick="unfollowSeller('${escJs(x.seller)}')">Stop</button>`).join('<br>'):' — nobody yet.'}</p><p><b>People keeping track of you (${fr.count})</b>${fr.followers.length?': '+fr.followers.map(escHtml).join(', '):' — nobody yet.'}</p>`;
 }
 async function saveShow(id){if(needSignIn())return;const r=await j('/api/shows/'+id+'/save',{});if(!r.ok){alert('Error: '+r.error);return;}load();}
-async function makeDrop(){if(needSignIn())return;const r=await j('/api/drops',{title:document.getElementById('dTitle').value});alert(r.ok?'Free Drop started — one entry per person, seller covers shipping':'Error');load();}
 async function makeShow(){if(needSignIn())return;const r=await j('/api/shows',{title:document.getElementById('cTitle').value,startsAt:new Date(document.getElementById('cWhen').value).toISOString()});alert(r.ok?'Show scheduled':'Error');load();}
 async function joinWaitlist(){const r=await j('/api/waitlist',{name:document.getElementById('wName').value,email:document.getElementById('wEmail').value,founding:document.getElementById('wFound').checked});
   if(!r.ok){document.getElementById('waitMsg').textContent=r.error;return;}
