@@ -500,17 +500,17 @@ app.post('/api/auth/signup', async (req, res) => {
   const password = String(b.password || '');
   const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
   const shippingAddress = String(b.shippingAddress || b.address || '').trim().slice(0, 500);
-  // Security question (Kevin, 2026-11-19): required at signup. Pick one
-  // from the list or write your own — the answer is hashed, never stored
-  // plain, and is required to reset the password later.
+  // Security question (Kevin, 2026-11-20): NOT asked at sign-up any more —
+  // it only comes up when you forget your password. A user can set one
+  // later (signed in, "Change security question") if they want to reset
+  // their own password; without one, a forgotten password is owner-reset
+  // only. Kept optional here so an old client that still sends one works.
   const secQ = String(b.securityQuestion || b.question || '').trim().slice(0, 200);
   const secA = String(b.securityAnswer || b.answer || '').trim();
   if (!name) return res.json({ ok: false, error: 'your name is required' });
   if (adHit(name) || bannedHit(name)) return res.json({ ok: false, error: 'that name cannot be used — no links, advertising or banned items in a display name' });
   if (!email || !email.includes('@')) return res.json({ ok: false, error: 'a valid email is required' });
   if (password.length < 8) return res.json({ ok: false, error: 'password must be at least 8 characters' });
-  if (!secQ) return res.json({ ok: false, error: 'pick a security question — you will need the answer to reset your password' });
-  if (secA.length < 2) return res.json({ ok: false, error: 'answer your security question — at least 2 characters' });
   const ex = await queryOne('SELECT id FROM users WHERE email=$1', [email]);
   if (ex) return res.json({ ok: false, error: 'an account with that email already exists — sign in instead' });
   // Display names are unique (2026-11-19 fix): two accounts with the same
