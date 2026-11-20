@@ -110,9 +110,12 @@ function show(w){document.getElementById('sellSec').style.display=w==='sell'?'bl
 async function load(){
   const o=await j('/api/overview');
   document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. 0% until it goes live, then 5% forever. Normal fee 10%.`;
-  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.seller_present).map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${escHtml(l.seller)}</b> — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
+  let followed=new Set(); if(currentUser){try{const f=await j('/api/following/'+encodeURIComponent(currentUser.name)); if(Array.isArray(f))f.forEach(x=>followed.add(x.seller));}catch(e){}}
+  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.seller_present).map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${escHtml(l.seller)}</b>${followed.has(l.seller)?' <span class="badge gold">Keeping track</span>':''} — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
-  let rows=o.listings.filter(l=>!curType||l.type===curType); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
+  // Giveaways (wheel) live only in the seller's room, never as cards on the
+  // main page — the main grid shows auctions and Store items only.
+  let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
   document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
@@ -122,7 +125,12 @@ async function load(){
   <p class="small">Status: ${escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
   const d=await j('/api/drops'); document.getElementById('drops').innerHTML=d.map(x=>`<p>Free Drop: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.status)} ${x.winner?'winner: '+escHtml(x.winner):''}</p>`).join('');
-  const s=await j('/api/coming-up'); document.getElementById('shows').innerHTML=s.map(x=>`<p>Coming Up: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.starts_at)}</p>`).join('');
+  const s=await j('/api/coming-up');
+  let savedShows=[]; if(currentUser){try{const sv=await j('/api/saved-shows'); if(Array.isArray(sv))savedShows=sv;}catch(e){}}
+  const saved=new Set(savedShows.map(x=>x.id));
+  document.getElementById('shows').innerHTML=s.map(x=>`<p>Coming Up: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.starts_at)} ${currentUser?`<button class="btn ghost" onclick="saveShow('${x.id}')">${saved.has(x.id)?'Saved ✓ — tap to unsave':'Save this show'}</button>`:''}</p>`).join('');
+  document.getElementById('savedShows').innerHTML=savedShows.length?`<p><b>My saved shows</b></p>`+savedShows.map(x=>`<p>${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.starts_at)} <button class="btn ghost" onclick="saveShow('${x.id}')">Unsave</button></p>`).join(''):'';
+  loadKeepTrack();
 }
 function setCat(c){curCat=c;load();}
 // Condition (Kevin, 2026-11-18): the seller must state it — New, Used –
@@ -463,46 +471,77 @@ function wheelSVG(l,rotDeg){
     const a=wheelAngle(i,n)*Math.PI/180;
     const x=cx+r*Math.sin(a), y=cy-r*Math.cos(a);
     const label=String(it.name||'').slice(0,18);
-    texts+=`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#0b1f3a" font-size="${font}" font-weight="700" transform="rotate(${wheelAngle(i,n)} ${x.toFixed(1)} ${y.toFixed(1)})">${escHtml(label)}</text>`;
+    texts+=`<text x="${x.toFixed(1)}" y="${y.toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#f5d76e" font-size="${font}" font-weight="700" transform="rotate(${wheelAngle(i,n)} ${x.toFixed(1)} ${y.toFixed(1)})">${escHtml(label)}</text>`;
   });
-  // Rim marks, like the clock in the first logo: 12 dark navy hour ticks
-  // (longer at 12, 3, 6 and 9) and a dot for every other minute.
-  let marks='';
-  for(let h=0;h<12;h++){
-    const a=h*30*Math.PI/180, q=h%3===0;
-    const o=146, inr=q?128:136;
-    marks+=`<line x1="${(cx+o*Math.sin(a)).toFixed(1)}" y1="${(cy-o*Math.cos(a)).toFixed(1)}" x2="${(cx+inr*Math.sin(a)).toFixed(1)}" y2="${(cy-inr*Math.cos(a)).toFixed(1)}" stroke="#0b1f3a" stroke-width="${q?4:2.5}" stroke-linecap="round"/>`;
+  // Fancy spade hands, like the pocket-watch picture: narrow at the base,
+  // a wide diamond near the tip, then a point. 10:10, as in the picture.
+  function fancyHand(deg,len,w){
+    const a=deg*Math.PI/180, dx=Math.sin(a), dy=-Math.cos(a), px=Math.cos(a), py=Math.sin(a);
+    const p=(d,off)=>`${(cx+dx*d+px*off).toFixed(1)},${(cy+dy*d+py*off).toFixed(1)}`;
+    return `<polygon points="${p(0,-w*0.55)} ${p(len*0.55,-w*0.8)} ${p(len*0.72,-w*1.7)} ${p(len,0)} ${p(len*0.72,w*1.7)} ${p(len*0.55,w*0.8)} ${p(0,w*0.55)}" fill="#0b1f3a"/>`;
   }
+  // A small gold gear, like the ones either side of the watch in the picture.
+  function gear(gx,gy,gr){
+    let teeth='';
+    for(let k=0;k<8;k++){
+      const a=k*45*Math.PI/180;
+      teeth+=`<line x1="${(gx+gr*Math.sin(a)).toFixed(1)}" y1="${(gy-gr*Math.cos(a)).toFixed(1)}" x2="${(gx+(gr+3)*Math.sin(a)).toFixed(1)}" y2="${(gy-(gr+3)*Math.cos(a)).toFixed(1)}" stroke="#c9a227" stroke-width="2.5" stroke-linecap="round"/>`;
+    }
+    return `${teeth}<circle cx="${gx}" cy="${gy}" r="${gr}" fill="none" stroke="#c9a227" stroke-width="2.5"/><circle cx="${gx}" cy="${gy}" r="2.5" fill="#c9a227"/>`;
+  }
+  // A gold filigree curl, like the scrolls around the watch in the picture.
+  function scroll(sx,sy,rot){
+    return `<g transform="translate(${sx} ${sy}) rotate(${rot})"><path d="M 8 2 A 8 8 0 1 1 -6 -6 A 4.5 4.5 0 1 0 2 -2" fill="none" stroke="#c9a227" stroke-width="2.2" stroke-linecap="round"/><circle cx="2" cy="-2" r="1.6" fill="#c9a227"/></g>`;
+  }
+  // The clock face, like the pocket-watch picture: cream face, ornate gold
+  // bezel, minute track, Roman numerals.
+  const numerals=['XII','I','II','III','IV','V','VI','VII','VIII','IX','X','XI'];
+  let face='';
   for(let m=0;m<60;m++){
-    if(m%5===0)continue;
-    const a=m*6*Math.PI/180;
-    marks+=`<circle cx="${(cx+141*Math.sin(a)).toFixed(1)}" cy="${(cy-141*Math.cos(a)).toFixed(1)}" r="1.6" fill="#0b1f3a" opacity="0.45"/>`;
+    const a=m*6*Math.PI/180, q=m%5===0;
+    face+=`<line x1="${(cx+68*Math.sin(a)).toFixed(1)}" y1="${(cy-68*Math.cos(a)).toFixed(1)}" x2="${(cx+(q?73:71)*Math.sin(a)).toFixed(1)}" y2="${(cy-(q?73:71)*Math.cos(a)).toFixed(1)}" stroke="#0b1f3a" stroke-width="${q?2:1.2}" stroke-linecap="round"/>`;
   }
-  // The little clock in the middle, like the clock in the first logo: white
-  // face, gold ring, dark navy rim, ticks, hands at 10:10.
-  let clockTicks='';
-  for(let h=0;h<12;h++){
-    const a=h*30*Math.PI/180, q=h%3===0;
-    const o=54, inr=q?46:50;
-    clockTicks+=`<line x1="${(cx+o*Math.sin(a)).toFixed(1)}" y1="${(cy-o*Math.cos(a)).toFixed(1)}" x2="${(cx+inr*Math.sin(a)).toFixed(1)}" y2="${(cy-inr*Math.cos(a)).toFixed(1)}" stroke="#0b1f3a" stroke-width="${q?3.5:2.5}" stroke-linecap="round"/>`;
-  }
+  numerals.forEach((num,h)=>{
+    const a=h*30*Math.PI/180;
+    face+=`<text x="${(cx+58*Math.sin(a)).toFixed(1)}" y="${(cy-58*Math.cos(a)).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#0b1f3a" font-size="15" font-weight="700" font-family="Georgia,'Times New Roman',serif">${num}</text>`;
+  });
   return `<svg viewBox="0 -32 320 388" style="width:100%;max-width:340px;display:block;margin:0 auto">
-  <circle cx="160" cy="160" r="152" fill="#ffffff" stroke="#0b1f3a" stroke-width="6"/>
-  ${marks}
+  <circle cx="160" cy="160" r="152" fill="#0b1f3a" stroke="#c9a227" stroke-width="5"/>
+  <circle cx="160" cy="160" r="146" fill="none" stroke="#c9a227" stroke-width="1" opacity="0.5"/>
+  <path d="M279.5,229 A138,138 0 1 1 62.4,62.4" fill="none" stroke="#c9a227" stroke-width="12" stroke-linecap="round"/>
+  <path d="M270.8,224 A128,128 0 1 1 69.5,69.5" fill="none" stroke="#c9a227" stroke-width="2" opacity="0.55"/>
+  <polygon points="47.4,53.8 79.5,55.6 65.1,80.6" fill="#c9a227"/>
   <g id="wheelDial" style="transform-origin:160px 160px;transform:rotate(${rotDeg||0}deg)">${texts}</g>
-  <path d="M243.1,208 A96,96 0 1 1 92.1,92.1" fill="none" stroke="#c9a227" stroke-width="12" stroke-linecap="round"/>
-  <polygon points="81.7,86.1 104,87.4 94,104.8" fill="#c9a227"/>
-  <circle cx="160" cy="160" r="64" fill="#ffffff" stroke="#c9a227" stroke-width="3"/>
-  <circle cx="160" cy="160" r="60" fill="none" stroke="#0b1f3a" stroke-width="3"/>
-  ${clockTicks}
-  <line x1="160" y1="160" x2="134" y2="145" stroke="#0b1f3a" stroke-width="5" stroke-linecap="round"/>
-  <line x1="160" y1="160" x2="194.6" y2="140" stroke="#0b1f3a" stroke-width="4" stroke-linecap="round"/>
-  <circle cx="160" cy="160" r="5" fill="#c9a227"/>
-  <path d="M143,320 L177,320 L166,336 L177,352 L143,352 L154,336 Z" fill="none" stroke="#c9a227" stroke-width="3"/>
-  <path d="M147,350 L173,350 L160,338 Z" fill="#c9a227" opacity="0.9"/>
-  <path d="M147,322 L173,322 L160,332 Z" fill="#c9a227" opacity="0.45"/>
-  <line x1="141" y1="320" x2="179" y2="320" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
-  <line x1="141" y1="352" x2="179" y2="352" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
+  ${gear(70,160,9)}${gear(250,160,9)}
+  ${scroll(90,90,45)}${scroll(230,90,-45)}${scroll(90,230,135)}${scroll(230,230,-135)}
+  <circle cx="160" cy="160" r="85" fill="none" stroke="#c9a227" stroke-width="1.5"/>
+  <circle cx="160" cy="160" r="80" fill="#f7ead0" stroke="#c9a227" stroke-width="6"/>
+  <circle cx="160" cy="160" r="74" fill="none" stroke="#0b1f3a" stroke-width="1"/>
+  ${face}
+  ${fancyHand(305,40,4.5)}${fancyHand(60,54,4)}
+  <circle cx="160" cy="160" r="5.5" fill="#c9a227"/>
+  <circle cx="160" cy="160" r="2" fill="#0b1f3a"/>
+  <path d="M118,208 C128,224 138,232 148,228 C152,238 156,246 160,250 C164,240 168,232 176,228 C188,232 198,222 202,208 C192,220 176,224 160,224 C144,224 128,220 118,208 Z" fill="#c9a227"/>
+  <path d="M140,246 C138,254 142,258 140,263" fill="none" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="140" cy="266" r="3" fill="#c9a227"/>
+  <path d="M160,250 C158,256 162,259 160,262" fill="none" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="160" cy="265" r="3" fill="#c9a227"/>
+  <path d="M180,246 C182,252 178,256 180,261" fill="none" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="180" cy="264" r="3" fill="#c9a227"/>
+  <circle cx="120" cy="258" r="2.5" fill="#c9a227"/>
+  <circle cx="205" cy="252" r="2" fill="#c9a227"/>
+  <g><line x1="112" y1="300" x2="132" y2="292" stroke="#c9a227" stroke-width="1.5"/><ellipse cx="116" cy="296" rx="7" ry="3" fill="#c9a227" transform="rotate(-30 116 296)"/><ellipse cx="124" cy="293" rx="7" ry="3" fill="#c9a227" transform="rotate(-15 124 293)"/><ellipse cx="130" cy="290" rx="6" ry="2.6" fill="#c9a227" transform="rotate(0 130 290)"/></g>
+  <g><line x1="208" y1="300" x2="188" y2="292" stroke="#c9a227" stroke-width="1.5"/><ellipse cx="204" cy="296" rx="7" ry="3" fill="#c9a227" transform="rotate(30 204 296)"/><ellipse cx="196" cy="293" rx="7" ry="3" fill="#c9a227" transform="rotate(15 196 293)"/><ellipse cx="190" cy="290" rx="6" ry="2.6" fill="#c9a227" transform="rotate(0 190 290)"/></g>
+  <path d="M160,295 L162.5,300.5 L168,303 L162.5,305.5 L160,311 L157.5,305.5 L152,303 L157.5,300.5 Z" fill="#f5d76e"/>
+  <line x1="132" y1="318" x2="132" y2="350" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <line x1="188" y1="318" x2="188" y2="350" stroke="#c9a227" stroke-width="3" stroke-linecap="round"/>
+  <circle cx="132" cy="318" r="3" fill="#c9a227"/><circle cx="132" cy="350" r="3" fill="#c9a227"/><circle cx="188" cy="318" r="3" fill="#c9a227"/><circle cx="188" cy="350" r="3" fill="#c9a227"/>
+  <path d="M142,316 L178,316 L166,334 L178,352 L142,352 L154,334 Z" fill="none" stroke="#c9a227" stroke-width="3"/>
+  <path d="M146,318 L174,318 L160,330 Z" fill="#c9a227" opacity="0.45"/>
+  <path d="M146,350 L174,350 L160,338 Z" fill="#c9a227" opacity="0.9"/>
+  <line x1="138" y1="316" x2="182" y2="316" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
+  <line x1="138" y1="352" x2="182" y2="352" stroke="#c9a227" stroke-width="3.5" stroke-linecap="round"/>
+  <ellipse cx="160" cy="353" rx="26" ry="2.5" fill="none" stroke="#c9a227" stroke-width="2"/>
   <polygon points="160,2 148,26 172,26" fill="#f5d76e" stroke="#c9a227" stroke-width="1"/></svg>`;
 }
 function wheelPanel(l){
@@ -535,6 +574,7 @@ function wheelPanel(l){
 }
 async function enterWheel(id){
   if(needSignIn())return;
+  await presencePing(id); // make sure this room-open check-in has landed first
   const r=await j('/api/listings/'+id+'/enter',{});
   if(!r.ok){alert('Error: '+r.error);return;}
   alert('You are in! Your name is on the wheel.');
@@ -562,7 +602,7 @@ async function openItem(id){
   const isSellerRoom=currentUser&&(l.seller_user_id?currentUser.id===l.seller_user_id:currentUser.name===l.seller);
   startPresence(id);
   const el=document.getElementById('detail'); el.scrollIntoView();
-  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p>
+  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${l.type==='wheel'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
@@ -616,6 +656,7 @@ async function openItem(id){
   } else if(l.seller_live&&(l.type==='auction'||l.type==='wheel')){
     startViewer(id);
   }
+  refreshKeepTrack(l.seller);
 }
 async function bid(id,add){if(needSignIn())return;const l=await j('/api/listings/'+id);const r=await j('/api/listings/'+id+'/bid',{amount:l.current_bid+add});alert(r.ok?`Bid placed: $${r.currentBid} (total $${r.total})`:'Error: '+r.error);openItem(id);}
 async function bidCustom(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/bid',{amount:Number(document.getElementById('bAmt').value)});alert(r.ok?`Bid placed: $${r.currentBid}`:'Error: '+r.error);openItem(id);}
@@ -680,7 +721,26 @@ async function confirmBad(id){
   load();
 }
 async function score(s){const r=await j('/api/scorecard/'+encodeURIComponent(s));alert(`Seller Scorecard for ${s}: ${r.average||'no scores yet'} / 5 from ${r.count} score(s)`);}
-async function follow(){if(needSignIn())return;const r=await j('/api/follow',{seller:document.getElementById('fSeller').value});document.getElementById('followMsg').textContent=r.message||r.error;}
+async function follow(){if(needSignIn())return;const r=await j('/api/follow',{seller:document.getElementById('fSeller').value});document.getElementById('followMsg').textContent=r.message||r.error;loadKeepTrack();load();}
+async function followSeller(name){if(needSignIn())return;const r=await j('/api/follow',{seller:name});alert(r.message||r.error);refreshKeepTrack(name);loadKeepTrack();}
+async function unfollowSeller(name){if(needSignIn())return;const r=await j('/api/unfollow',{seller:name});alert(r.message||r.error);refreshKeepTrack(name);loadKeepTrack();}
+async function refreshKeepTrack(seller){
+  const box=document.getElementById('keepTrackBox'); if(!box)return;
+  if(!currentUser){box.innerHTML='<p class="small">Sign in to keep track of this seller.</p>';return;}
+  let isF=false, count=0;
+  try{const f=await j('/api/following/'+encodeURIComponent(currentUser.name)); isF=Array.isArray(f)&&f.some(x=>x.seller===seller);}catch(e){}
+  try{const fc=await j('/api/followers/'+encodeURIComponent(seller)); if(fc&&typeof fc.count==='number')count=fc.count;}catch(e){}
+  const self=currentUser.name===seller;
+  box.innerHTML=`<p class="small"><b>${count} ${count===1?'person':'people'} keeping track of ${escHtml(seller)}</b></p>`+(self?'':(isF?`<button class="btn ghost" onclick="unfollowSeller('${escJs(seller)}')">Keeping track ✓ — stop</button>`:`<button class="btn" onclick="followSeller('${escJs(seller)}')">Keep Track — follow ${escHtml(seller)}</button>`));
+}
+async function loadKeepTrack(){
+  const box=document.getElementById('keepTrackLists'); if(!box)return;
+  if(!currentUser){box.innerHTML='<p class="small">Sign in to see who you keep track of and who keeps track of you.</p>';return;}
+  let mine=[]; try{const f=await j('/api/following/'+encodeURIComponent(currentUser.name)); if(Array.isArray(f))mine=f;}catch(e){}
+  let fr={count:0,followers:[]}; try{const r=await j('/api/followers/'+encodeURIComponent(currentUser.name)); if(r&&r.ok)fr=r;}catch(e){}
+  box.innerHTML=`<p><b>People you're keeping track of (${mine.length})</b>${mine.length?'<br>'+mine.map(x=>`${escHtml(x.seller)}${x.liveNow?' — <span class="badge">🔴 LIVE NOW</span>':''}${x.nextShow?' — next show '+escHtml(x.nextShow):''} <button class="btn ghost" onclick="unfollowSeller('${escJs(x.seller)}')">Stop</button>`).join('<br>'):' — nobody yet.'}</p><p><b>People keeping track of you (${fr.count})</b>${fr.followers.length?': '+fr.followers.map(escHtml).join(', '):' — nobody yet.'}</p>`;
+}
+async function saveShow(id){if(needSignIn())return;const r=await j('/api/shows/'+id+'/save',{});if(!r.ok){alert('Error: '+r.error);return;}load();}
 async function makeDrop(){if(needSignIn())return;const r=await j('/api/drops',{title:document.getElementById('dTitle').value});alert(r.ok?'Free Drop started — one entry per person, seller covers shipping':'Error');load();}
 async function makeShow(){if(needSignIn())return;const r=await j('/api/shows',{title:document.getElementById('cTitle').value,startsAt:new Date(document.getElementById('cWhen').value).toISOString()});alert(r.ok?'Show scheduled':'Error');load();}
 async function joinWaitlist(){const r=await j('/api/waitlist',{name:document.getElementById('wName').value,email:document.getElementById('wEmail').value,founding:document.getElementById('wFound').checked});

@@ -87,10 +87,10 @@
 <button class="btn ghost" id="markSentBtn" style="display:none" onclick="markLiveSent()">I sent it from my own email — mark as sent</button>
 <p id="liveNoticeMsg"></p></section>
 
-<section class="card"><h2>Seven extras</h2><p class="small">Keep Track (follow a seller) • Free Drops (free giveaway) • My Top Limit (max bid) • Seller Scorecard • Coming Up (scheduled shows) • One Box Deal (combined shipping) • Label Pass (test label, no real carrier yet). Use the buttons on each item page / in the tools below.</p>
-<label>Follow a seller — your name <input id="fBuyer" placeholder="Your name"></label><label>Seller to follow <input id="fSeller" placeholder="Seller name"></label><button class="btn" onclick="follow()">Keep Track</button><p id="followMsg"></p>
+<section class="card"><h2>Seven extras</h2><p class="small">Keep Track (follow sellers and buyers) • Free Drops (free giveaway) • My Top Limit (max bid) • Seller Scorecard • Coming Up (scheduled shows) • One Box Deal (combined shipping) • Label Pass (test label, no real carrier yet). Use the buttons on each item page / in the tools below.</p>
+<label>Keep track of someone — your name <input id="fBuyer" placeholder="Your name"></label><label>Person to keep track of (seller or buyer) <input id="fSeller" placeholder="Their name"></label><button class="btn" onclick="follow()">Keep Track</button><p id="followMsg"></p><div id="keepTrackLists"></div>
 <label>Start a Free Drop — seller <input id="dSeller"></label><label>Drop title <input id="dTitle" placeholder="Free watch giveaway"></label><button class="btn" onclick="makeDrop()">Start Free Drop</button><div id="drops"></div>
-<label>Coming Up — seller <input id="cSeller"></label><label>Show title <input id="cTitle"></label><label>Starts at <input id="cWhen" type="datetime-local"></label><button class="btn" onclick="makeShow()">Schedule show</button><div id="shows"></div>
+<label>Coming Up — seller <input id="cSeller"></label><label>Show title <input id="cTitle"></label><label>Starts at <input id="cWhen" type="datetime-local"></label><button class="btn" onclick="makeShow()">Schedule show</button><div id="shows"></div><div id="savedShows"></div>
 </section>
 
 <section class="card"><h2>Rules — short version</h2><ol>
