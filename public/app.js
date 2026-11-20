@@ -461,13 +461,14 @@ function stopPresence(){
 // navy): a winder crown + bow on top, 12 gold hour ticks and minute dots
 // around the dial, and two gold clock hands at 10:10 in the middle.
 function wheelAngle(i,n){return n?i*360/n:0;}
-function wheelSVG(l,rotDeg){
+function wheelSVG(l,rotDeg,hideNames,sizePx){
   const items=l.wheel_items||[];
-  if(!items.length)return '<p class="small">No items on this wheel yet.</p>';
+  if(!items.length&&!hideNames)return '<p class="small">No items on this wheel yet.</p>';
   const n=items.length, cx=160, cy=160, r=118;
   const font=n<=12?13:n<=24?11:n<=48?9:7;
   let texts='';
-  items.forEach((it,i)=>{
+  // Kevin 2026-11-19: names stay hidden on the wheel until it spins.
+  if(!hideNames)items.forEach((it,i)=>{
     const a=wheelAngle(i,n)*Math.PI/180;
     const x=cx+r*Math.sin(a), y=cy-r*Math.cos(a);
     const label=String(it.name||'').slice(0,18);
@@ -505,7 +506,7 @@ function wheelSVG(l,rotDeg){
     const a=h*30*Math.PI/180;
     face+=`<text x="${(cx+58*Math.sin(a)).toFixed(1)}" y="${(cy-58*Math.cos(a)).toFixed(1)}" text-anchor="middle" dominant-baseline="middle" fill="#0b1f3a" font-size="15" font-weight="700" font-family="Georgia,'Times New Roman',serif">${num}</text>`;
   });
-  return `<svg viewBox="0 -32 320 388" style="width:100%;max-width:340px;display:block;margin:0 auto">
+  return `<svg viewBox="0 -32 320 388" style="width:100%;max-width:${sizePx||340}px;display:block;margin:0 auto">
   <circle cx="160" cy="160" r="152" fill="#0b1f3a" stroke="#c9a227" stroke-width="5"/>
   <circle cx="160" cy="160" r="146" fill="none" stroke="#c9a227" stroke-width="1" opacity="0.5"/>
   <path d="M279.5,229 A138,138 0 1 1 62.4,62.4" fill="none" stroke="#c9a227" stroke-width="12" stroke-linecap="round"/>
@@ -544,9 +545,30 @@ function wheelSVG(l,rotDeg){
   <ellipse cx="160" cy="353" rx="26" ry="2.5" fill="none" stroke="#c9a227" stroke-width="2"/>
   <polygon points="160,2 148,26 172,26" fill="#f5d76e" stroke="#c9a227" stroke-width="1"/></svg>`;
 }
+// Kevin 2026-11-19: the giveaway entry sits in the corner of the live show,
+// not in the chat they type in — tap the small wheel and you're in. It only
+// shows while the seller is live (the giveaway is only offered when live),
+// while entries are still open, and never to the seller — they run it, they
+// don't enter it.
+function cornerWheelHTML(l){
+  const isSeller=currentUser&&l.seller_user_id?currentUser.id===l.seller_user_id:currentUser&&currentUser.name===l.seller;
+  if(l.type!=='wheel'||isSeller||!l.seller_live||l.wheel_spun||l.status==='ended')return '';
+  const n=(l.wheel_entries||[]).length;
+  const entered=!!l.wheel_entered;
+  const names=(l.wheel_entries||[]).map(x=>({name:x.name}));
+  return `<div id="cornerWheel"${entered?'':` onclick="enterWheel('${l.id}')"`} style="position:absolute;top:8px;right:8px;width:84px;text-align:center;${entered?'':'cursor:pointer;'}z-index:5">
+  ${wheelSVG({...l,wheel_items:names},0,true,80)}
+  <span style="display:inline-block;background:${entered?'#2e7d32':'#c9a227'};color:${entered?'#fff':'#0b1f3a'};border-radius:20px;padding:2px 8px;font-size:11px;font-weight:800;margin-top:2px">${entered?'✓ You are in — '+n+' in':'⏰ '+n+' in — tap to enter'}</span>
+  </div>`;
+}
 function wheelPanel(l){
   // FREE giveaway: the wheel holds the NAMES of the people who entered free.
+  // Kevin 2026-11-19: names stay hidden until the wheel spins; entry is the
+  // small wheel in the corner of the live show (see cornerWheelHTML), not a
+  // button in the panel; the wheel pops up big on the screen only when it
+  // spins to pick the winner (see spinWheel / wheelOverlayHTML).
   const names=(l.wheel_entries||[]).map(x=>({name:x.name}));
+  const showNames=!!l.wheel_spun;
   const landedIdx=names.findIndex(x=>x.name===l.wheel_landed_item);
   const rot=l.wheel_spun&&landedIdx>=0?-wheelAngle(landedIdx,names.length):0;
   const isSeller=currentUser&&l.seller_user_id?currentUser.id===l.seller_user_id:currentUser&&currentUser.name===l.seller;
@@ -560,17 +582,35 @@ function wheelPanel(l){
     status=`<p class="small">Entries closed — nobody entered, so the wheel had no names to land on.</p>`;
   } else {
     status=`<p class="small">FREE giveaway — enter free and your name goes on the wheel. Entries stay open until the timer runs out, then the wheel spins itself — or the seller spins it by hand. The winner gets this item free.</p>`
-      +(l.wheel_entered?`<p><b>You are on the wheel!</b> One entry per person.</p>`:`<button class="btn" onclick="enterWheel('${l.id}')">Enter free — put my name on the wheel</button>`)
+      +(l.wheel_entered?`<p><b>You are on the wheel!</b> One entry per person.</p>`:(l.seller_live?`<p class="small">Tap the ⏰ wheel in the corner of the live show to enter free.</p>`:`<p class="small">The giveaway opens when the seller goes live — the wheel will sit in the corner of the live show.</p>`))
       +(isSeller&&names.length?` <button class="btn ghost" onclick="spinWheel('${l.id}')">Spin the Time Wheel</button>`:'');
   }
   return `<div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:10px;background:#0b1f3a">
   <h3 style="color:#f5d76e;margin-top:0">⏰ Time Wheel — ${names.length} name${names.length===1?'':'s'} on the wheel</h3>
   <p class="small" style="color:#f5d76e">Free giveaway — nobody pays, nobody buys a spot. The winner gets this item free.</p>
-  ${wheelSVG({...l,wheel_items:names},rot)}
+  ${wheelSVG({...l,wheel_items:names},rot,!showNames,220)}
   ${status}
   <p id="wheelMsg" class="small"></p>
-  <details><summary class="small">See all ${names.length} names on the wheel</summary><ol class="small">${names.map(x=>`<li>${escHtml(x.name)}</li>`).join('')}</ol></details>
+  ${showNames?`<details><summary class="small">See all ${names.length} names on the wheel</summary><ol class="small">${names.map(x=>`<li>${escHtml(x.name)}</li>`).join('')}</ol></details>`:''}
   </div>`;
+}
+// Kevin 2026-11-19: when the wheel spins to pick the winner it pops up big
+// on the screen. Big overlay with the names on it, spins ~4s, then the winner
+// pops up. Closing it shows the room again with the landed wheel.
+function wheelOverlayHTML(l){
+  const names=(l.wheel_entries||[]).map(x=>({name:x.name}));
+  return `<div id="wheelOverlay" style="position:fixed;inset:0;background:rgba(4,12,26,.97);z-index:9999;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:16px;overflow:auto">
+  <h2 style="color:#f5d76e;margin:0 0 8px">⏰ Time Wheel</h2>
+  <div style="width:100%;max-width:560px">${wheelSVG({...l,wheel_items:names},0,false,560)}</div>
+  <p id="wheelOverlayMsg" class="small" style="color:#f5d76e">Spinning…</p>
+  <p id="wheelOverlayLanded" style="display:none;background:rgba(201,162,39,.2);border:1px solid #c9a227;border-radius:8px;padding:10px"><b>⏰ The wheel landed on: ${escHtml(l.wheel_landed_item||'')}</b> — they win <b>${escHtml(l.title)}</b> FREE!</p>
+  <button class="btn" id="wheelOverlayClose" style="display:none" onclick="closeWheelOverlay('${l.id}')">Close</button>
+  </div>`;
+}
+function closeWheelOverlay(id){
+  const ov=document.getElementById('wheelOverlay');
+  if(ov)ov.remove();
+  openItem(id);
 }
 async function enterWheel(id){
   if(needSignIn())return;
@@ -589,10 +629,21 @@ async function spinWheel(id){
   const names=l.wheel_entries||[];
   const idx=Math.max(0,names.findIndex(x=>x.name===r.landedName));
   const target=360*6-wheelAngle(idx,names.length||1);
-  const dial=document.getElementById('wheelDial');
+  // Kevin 2026-11-19: names were hidden until now, and the wheel was small in
+  // the room — pop it up big on the screen to spin and pick the winner.
+  const old=document.getElementById('wheelOverlay');
+  if(old)old.remove();
+  const wrap=document.createElement('div');
+  wrap.innerHTML=wheelOverlayHTML(l);
+  document.body.appendChild(wrap.firstChild);
+  const ov=document.getElementById('wheelOverlay');
+  const dial=ov?ov.querySelector('#wheelDial'):null;
   if(dial){dial.style.transition='transform 4s cubic-bezier(.15,.8,.25,1)';dial.style.transform=`rotate(${target}deg)`;}
-  const msg=document.getElementById('wheelMsg'); if(msg)msg.textContent='⏰ Spinning…';
-  setTimeout(()=>openItem(id),4300);
+  setTimeout(()=>{
+    const m=document.getElementById('wheelOverlayMsg'); if(m)m.textContent='';
+    const landed=document.getElementById('wheelOverlayLanded'); if(landed)landed.style.display='block';
+    const close=document.getElementById('wheelOverlayClose'); if(close)close.style.display='block';
+  },4300);
 }
 async function openItem(id){
   const wasLive=liveListingId===id&&(liveRole==='seller'||liveRole==='viewer');
@@ -631,7 +682,10 @@ async function openItem(id){
   <p id="shipMsg" class="small"></p></div>`:''}
   <h3>Live video ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3>
   ${isSellerRoom&&l.seller_live?`<p id="watchingLine" style="color:#f5c542;font-weight:800;margin:6px 0">👥 ${l.watching||0} watching now</p>`:''}
+  <div style="position:relative;background:#000;border-radius:10px;min-height:200px">
   <video id="liveVideo" playsinline autoplay style="width:100%;max-height:420px;background:#000;border-radius:10px;display:none"></video>
+  ${cornerWheelHTML(l)}
+  </div>
   <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <p id="liveStatus" class="small">${l.seller_live?'Seller is live — connecting to live video…':'Seller is not live yet. When they go live, their camera shows here.'}</p>
   <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
