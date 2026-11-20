@@ -62,7 +62,14 @@ async function loadChallenge(){
 async function signUp(){
   const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',challengeId:window._challengeId||'',challengeAnswer:document.getElementById('aChallengeA')?document.getElementById('aChallengeA').value:''});
   loadChallenge();
-  if(!r.ok){authMsg('Error: '+r.error);return;}
+  if(!r.ok){
+    // The check question changes after every try, so the answer just typed
+    // is stale — clear it so it can't be sent again by mistake.
+    const ca=document.getElementById('aChallengeA'); if(ca)ca.value='';
+    authMsg('Error: '+r.error);
+    const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
+    return;
+  }
   setSession(r.user,r.sessionToken);authMsg('Signed up — welcome, '+r.user.name+'.');
 }
 async function signIn(){
