@@ -133,9 +133,17 @@ async function signOutEverywhere(){if(needSignIn())return;const r=await j('/api/
 function needSignIn(){if(!currentUser){alert('Sign in first — buyers and sellers need an account to bid, buy, list or chat.');return true;}return false;}
 async function oj(u,o){let r=await j(u,o,ownerHeaders());if(r&&!r.ok&&(r.error==='owner password required'||r.error==='owner password not set')){const p=prompt('Owner password? (the OWNER_PASSWORD you set in Railway — it stays on this device only)');if(p){try{sessionStorage.setItem('btb_owner_pw',p);}catch(e){}r=await j(u,o,ownerHeaders());}}return r;}
 let cats=['All','Watches','Clothes','Shoes','Electronics','Collectibles','Home','Fashion','Art','Sports','Toys','Other'];
-let curCat='All', curType='';
+let curCat='All', curType='', curSeller='';
+// Fixed price is only for the Store (Kevin, 2026-11-20): an auction never
+// has a fixed price, so nobody can buy it outright before the auction is
+// done. The "Store fixed price" field only shows when the listing type
+// is "List in Store (Buy Now Only)".
+function toggleFixedPrice(){const t=document.getElementById('sType');const isStore=t&&t.value==='buy_now';const r=document.getElementById('sFixedRow');if(r)r.style.display=isStore?'':'none';const n=document.getElementById('sFixedNote');if(n)n.style.display=isStore?'':'none';}
+// A seller's Store: show only that seller's fixed-price (Store) listings.
+function showSellerStore(seller){curType='buy_now';curSeller=seller||'';curCat='All';load();const t=document.getElementById('list');if(t)t.scrollIntoView({behavior:'smooth',block:'start'});}
+function clearSellerStore(){curSeller='';load();}
 async function j(u,o,headers){const r=await fetch(u,o?{method:'POST',headers:Object.assign({'Content-Type':'application/json'},sessionHeaders(),headers||{}),body:JSON.stringify(o)}:{headers:Object.assign({},sessionHeaders(),headers||{})});return r.json();}
-function show(w){document.getElementById('sellSec').style.display=w==='sell'?'block':'none';document.getElementById('dashSec').style.display=w==='dash'?'block':'none';document.getElementById('profileSec').style.display=w==='profile'?'block':'none';if(w==='buy'){curType='';load();}if(w==='store'){curType='buy_now';load();}if(w==='dash')loadDash();if(w==='profile')loadProfile();const target=w==='sell'?document.getElementById('sellSec'):w==='dash'?document.getElementById('dashSec'):w==='profile'?document.getElementById('profileSec'):document.getElementById('list');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}if(w==='sell'){const f=document.getElementById('sSeller');if(f){if(currentUser)f.value=currentUser.name;setTimeout(()=>f.focus(),400);}}}
+function show(w){document.getElementById('sellSec').style.display=w==='sell'?'block':'none';document.getElementById('dashSec').style.display=w==='dash'?'block':'none';document.getElementById('profileSec').style.display=w==='profile'?'block':'none';if(w==='buy'){curType='';curSeller='';load();}if(w==='store'){curType='buy_now';curSeller='';load();}if(w==='dash')loadDash();if(w==='profile')loadProfile();const target=w==='sell'?document.getElementById('sellSec'):w==='dash'?document.getElementById('dashSec'):w==='profile'?document.getElementById('profileSec'):document.getElementById('list');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}if(w==='sell'){const f=document.getElementById('sSeller');if(f){if(currentUser)f.value=currentUser.name;setTimeout(()=>f.focus(),400);}}}
 // My Profile (Kevin, 2026-11-20): one page that shows you're signed in,
 // who you are, what you bought and what you sold — each with its stage:
 // processing, sent, delivered, finalized.
@@ -195,15 +203,16 @@ async function load(){
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   // Giveaways (wheel) live only in the seller's room, never as cards on the
   // main page — the main grid shows auctions and Store items only.
-  let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat);
-  document.getElementById('list').innerHTML=rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
+  // A seller's Store (curSeller) shows only that seller's fixed-price items.
+  let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
+  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">Status: ${escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
-  <button class="btn" onclick="openItem('${l.id}')">Open</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
+  <button class="btn" onclick="openItem('${l.id}')">Open</button> <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
   const s=await j('/api/coming-up');
   let savedShows=[]; if(currentUser){try{const sv=await j('/api/saved-shows'); if(Array.isArray(sv))savedShows=sv;}catch(e){}}
   const saved=new Set(savedShows.map(x=>x.id));
@@ -421,7 +430,10 @@ async function createListing(){
   const size=document.getElementById('sSize').value;
   const _sw=document.getElementById('sWheel');
   const wheelItems=_sw?(_sw.value||'').split('\n').map(s=>s.trim()).filter(Boolean):[];
-  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:document.getElementById('sFixed').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
+  // Fixed price is only for the Store (Kevin, 2026-11-20): an auction never
+  // has one, so nobody can buy it outright before the auction is done.
+  const _isStore=document.getElementById('sType').value==='buy_now';
+  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:_isStore?document.getElementById('sFixed').value:null,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
 // Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
@@ -777,7 +789,7 @@ async function openItem(id){
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Your name <input id="cName"></label><label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
-  <button class="btn ghost" onclick="offer('${l.id}')">Post Buy It Now offer in chat (seller)</button>
+  <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store — fixed-price items</button>
   <p><button class="btn ghost" onclick="report('${l.id}')">Report this listing</button> <button class="btn ghost" onclick="score('${escJs(l.seller)}')">Seller Scorecard</button>${ownerPw()?` <button class="btn ghost" onclick="confirmBad('${l.id}')">Confirm bad listing — fake / stolen / banned (owner)</button>`:''}</p>
   <div id="itemMsg"></div></div>`;
   if(l.qr_text)drawQR(l.qr_text,document.getElementById('shipQR'));
@@ -847,7 +859,6 @@ async function endLive(id){
   const r=await j('/api/listings/'+id+'/end-live',{seller},sellerHeaders(seller));noteSellerToken(seller,r);
   openItem(id);
 }
-async function offer(id){if(needSignIn())return;const amt=prompt('Buy It Now offer $ ?');if(!amt)return;const seller=authName()||document.getElementById('cName').value;const r=await j('/api/listings/'+id+'/buy-now-offer',{seller,amount:Number(amt)},sellerHeaders(seller));noteSellerToken(seller,r);alert(r.ok?'Offer posted in chat':'Error: '+r.error);openItem(id);}
 async function report(id){if(needSignIn())return;const r=await j('/api/report',{listingId:id,reason:prompt('What is wrong with this listing?')||''});alert(r.ok?r.message:('Error: '+r.error));}
 async function confirmBad(id){
   const reason=prompt('What is wrong with this listing? (fake, stolen, or banned item)');
@@ -941,7 +952,7 @@ function copyLiveEmails(){
 }
 async function setTax(){const r=await oj('/api/settings/tax',{percent:Number(document.getElementById('taxPct').value)});alert(r.ok?'Tax % set to '+r.taxPercent:'Error: '+r.error);loadDash();}
 document.getElementById('sCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
-load(); loadSession(); renderAuth(); authMe(); setInterval(load,15000);
+load(); loadSession(); renderAuth(); authMe(); toggleFixedPrice(); setInterval(load,15000);
 // Owner dashboard is NOT listed on the site — only the owner opens it, by adding ?owner to the site address, then entering the owner password. Buyers and sellers never see it.
 (function(){const q=new URLSearchParams(location.search);if(q.has('owner'))setTimeout(()=>show('dash'),600);})();
 // A scanned QR code opens this exact sold item: ?i=<listing id>&r=<receipt>&t=<tracking>
