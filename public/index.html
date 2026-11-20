@@ -26,7 +26,7 @@
 <section class="hero"><h2>Buy it. Sell it. That's it.</h2><p>Live auctions, the Time Wheel giveaway, and a store — all in one place.</p></section>
 
 <section class="card" id="authSec"><h2>Your account</h2><p class="small" id="authStatus">Not signed in — sign up or sign in to bid, buy, list or chat.</p>
-<label>Your name <input id="aName" placeholder="e.g. Kevin"></label>
+<label>Username — this is what people see, not your real name <input id="aName" placeholder="Pick a username"></label>
 <label>Email <input id="aEmail" type="email" placeholder="you@example.com"></label>
 <label style="display:none">Website <input id="aWebsite" tabindex="-1" autocomplete="off"></label>
 <label>Password <input id="aPass" type="password" placeholder="At least 8 characters"></label>
@@ -35,9 +35,8 @@
 <label id="aSecQCustomWrap" style="display:none">Your own question <input id="aSecQCustom" placeholder="Type your own security question"></label>
 <label>Answer to your security question <input id="aSecA" placeholder="Only you know this — it is never shown to anyone"></label>
 <p class="small">You need this answer to reset your password. It is stored scrambled, never as plain text, and never shown to anyone — not even the owner.</p>
-<label>Default shipping address — your main address <input id="aAddr" placeholder="Street, town/city, state, ZIP"></label><p class="small">This is your main/default shipping address — it is the one used when you bid or buy. You can change it any time when you are signed in, and the change counts for future buys only. An item you already won always ships to the address that was on file when you won it.</p>
+<label>Your real name and shipping address — your main address <input id="aAddr" placeholder="Real name, street, town/city, state, ZIP"></label><p class="small">Put your real name first, then your address — this is the name and address the seller ships to. It is the one used when you bid or buy. You can change it any time when you are signed in, and the change counts for future buys only. An item you already won always ships to the address that was on file when you won it.</p>
 <button class="btn ghost" onclick="saveAddress()">Save shipping address</button><br>
-<label><input type="checkbox" id="aHumanCheck" style="width:auto"> I'm a person, not a robot</label>
 <button class="btn" onclick="signUp()">Sign up</button>
 <button class="btn ghost" onclick="signIn()">Sign in</button>
 <button class="btn ghost" onclick="signOut()">Sign out</button>

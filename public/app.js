@@ -56,11 +56,9 @@ async function authMe(){
 function authMsg(t){const m=document.getElementById('authMsg');if(m)m.textContent=t||'';}
 function secQValue(){const sel=document.getElementById('aSecQ');if(!sel)return '';if(sel.value==='__custom'){const c=document.getElementById('aSecQCustom');return c?c.value:'';}return sel.value;}
 async function signUp(){
-  // Checkbox check (Kevin, 2026-11-20): the sum check is gone — a ticked
-  // box proves you're a person. The server checks it too.
-  const hc=document.getElementById('aHumanCheck');
-  if(!hc||!hc.checked){authMsg('Error: tick the box to prove you are a person — it shows you are not a script');const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});return;}
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',humanCheck:true});
+  // No human check (Kevin, 2026-11-20): the sum and the checkbox are both
+  // gone — just fill in the form and tap Sign up.
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,securityQuestion:secQValue(),securityAnswer:document.getElementById('aSecA').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:''});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
