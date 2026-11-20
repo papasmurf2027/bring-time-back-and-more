@@ -871,11 +871,30 @@ async function attachWheelCounts(rows) {
   for (const c of counts) map[c.listing_id] = Number(c.n);
   return rows.map(l => ({ ...l, wheel_count: map[l.id] || 0 }));
 }
+// ---------- Live Now stays up while the seller is still live (Kevin, 2026-11-19) ----------
+// The show never ends until the seller ends it: an item's timer ending only
+// ends that item, not the show. So a room stays in Live Now while the seller
+// is still there — checked by their 15-second presence check-in, not by the
+// listing still being open. If they close the page, the check-in goes stale
+// within a minute and the room drops out on its own.
+async function sellerPresent(l) {
+  const since = new Date(Date.now() - 60000).toISOString();
+  const row = await queryOne('SELECT 1 AS x FROM room_presence WHERE listing_id=$1 AND last_seen>=$2 AND (user_id=$3 OR name=$4) LIMIT 1',
+    [l.id, since, l.seller_user_id || '', l.seller]);
+  return !!row;
+}
+async function attachSellerPresence(rows) {
+  const out = [];
+  for (const l of rows) {
+    out.push(l.seller_live ? { ...l, seller_present: (await sellerPresent(l)) ? 1 : 0 } : l);
+  }
+  return out;
+}
 app.get('/api/overview', async (req, res) => {
   const settings = await getSettings();
-  const listings = await attachWheelCounts(await hideSuspended(await query('SELECT * FROM listings ORDER BY created_at DESC')));
+  const listings = await attachSellerPresence(await attachWheelCounts(await hideSuspended(await query('SELECT * FROM listings ORDER BY created_at DESC'))));
   const founding = await foundingStatus();
-  const liveNow = listings.filter(l => l.seller_live && l.status === 'live');
+  const liveNow = listings.filter(l => l.seller_live && l.seller_present);
   res.json({ name: 'Bring Time Back and More', prelaunch: !!settings.prelaunch, founding, taxPercent: settings.tax_percent, liveNowCount: liveNow.length, listings: listings.map(l => _stripWinnerAddress(l, req, null)), categories: CATEGORIES });
 });
 app.get('/api/listings', async (req, res) => {
