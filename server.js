@@ -703,7 +703,7 @@ async function spinWheelFor(l) {
   if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
     [uid(), l.id, carrier, tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-    [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — they win ${l.title} FREE. No payment, no extra charge.`, nowISO()]);
+    [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — they win ${l.title} FREE. No payment, no extra charge — the seller covers the shipping.`, nowISO()]);
   return { landedName: landed.name, landedIndex: idx, totalEntries: entries.length, winnerAddress, tracking, carrier };
 }
 // ---------- Seller-choice return rule (Kevin, 2026-11-18) ----------
