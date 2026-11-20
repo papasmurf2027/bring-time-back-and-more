@@ -880,6 +880,32 @@ app.get('/api/overview', async (req, res) => {
   const liveNow = listings.filter(l => l.seller_live && l.seller_present);
   res.json({ name: 'Bring Time Back and More', prelaunch: !!settings.prelaunch, founding, taxPercent: settings.tax_percent, liveNowCount: liveNow.length, listings: listings.map(l => _stripWinnerAddress(l, req, null)), categories: CATEGORIES });
 });
+// My profile (Kevin, 2026-11-20): what I bought and what I sold, each
+// with its stage — processing, sent, delivered, finalized. Signed in only;
+// a buyer never sees another buyer's purchases.
+app.get('/api/my-activity', async (req, res) => {
+  const u = await _userFromSession(req);
+  if (!u) return res.status(401).json({ ok: false, error: 'not signed in' });
+  const bought = await query("SELECT * FROM listings WHERE (winner_user_id=$1 OR winner=$2) AND status='sold' ORDER BY created_at DESC", [u.id, u.name]);
+  const sold = await query("SELECT * FROM listings WHERE seller=$1 AND status='sold' ORDER BY created_at DESC", [u.name]);
+  const stageOf = (l) => {
+    if (l.escrow_status === 'released') return 'finalized';
+    if (l.escrow_status === 'refunded') return 'refunded';
+    if (l.payment_status === 'free' && l.delivered) return 'finalized';
+    if (l.delivered) return 'delivered';
+    if (l.shipped_at) return 'sent';
+    return 'processing';
+  };
+  const clean = (l) => ({
+    id: l.id, title: l.title, type: l.type,
+    price: l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0),
+    shipping: l.shipping || 0,
+    seller: l.seller, winner: l.winner,
+    stage: stageOf(l), tracking: l.tracking || '', carrier: l.carrier || '',
+    delivered: !!l.delivered, created_at: l.created_at, image_url: l.image_url || ''
+  });
+  res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean) });
+});
 app.get('/api/listings', async (req, res) => {
   let rows = await query('SELECT * FROM listings ORDER BY created_at DESC');
   if (req.query.type) rows = rows.filter(l => l.type === req.query.type);
