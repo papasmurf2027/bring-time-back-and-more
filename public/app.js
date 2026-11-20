@@ -25,7 +25,7 @@ function setSession(user,token){
   currentUser=user||null;
   try{
     if(token)localStorage.setItem('btb_session',token);
-    if(user)localStorage.setItem('btb_user',JSON.stringify(user));
+    if(user){localStorage.setItem('btb_user',JSON.stringify(user));if(user.email)localStorage.setItem('btb_last_email',user.email);}
     else{localStorage.removeItem('btb_session');localStorage.removeItem('btb_user');}
   }catch(e){}
   renderAuth();
@@ -45,6 +45,11 @@ function renderAuth(){
   if(el)el.innerHTML=currentUser?('<b>You are signed in as '+escHtml(currentUser.name)+'</b> ('+escHtml(currentUser.role)+')'):'Not signed in — sign up or sign in to bid, buy, list or chat.';
   const pb=document.getElementById('profileBtn'); if(pb)pb.style.display=currentUser?'':'none';
   const apb=document.getElementById('authProfileBtn'); if(apb)apb.style.display=currentUser?'':'none';
+  // Email and shipping address save to the profile so they don't have to
+  // be filled out every time (Kevin, 2026-11-20). Signed in: both fill in
+  // from the profile. Signed out: the email fills in from the last
+  // sign-in, so you only type the password to sign back in.
+  const ae=document.getElementById('aEmail'); if(ae){if(currentUser)ae.value=currentUser.email;else{try{const le=localStorage.getItem('btb_last_email');if(le&&!ae.value)ae.value=le;}catch(e){}}}
   const ss=document.getElementById('sSeller'); if(ss&&currentUser)ss.value=currentUser.name;
   const ad=document.getElementById('aAddr'); if(ad)ad.value=currentUser?(currentUser.shippingAddress||''):''; 
   if(!currentUser){const ps=document.getElementById('profileSec'); if(ps)ps.style.display='none';}
