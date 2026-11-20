@@ -52,6 +52,11 @@ function renderAuth(){
   const ae=document.getElementById('aEmail'); if(ae){if(currentUser)ae.value=currentUser.email;else{try{const le=localStorage.getItem('btb_last_email');if(le&&!ae.value)ae.value=le;}catch(e){}}}
   const ss=document.getElementById('sSeller'); if(ss&&currentUser)ss.value=currentUser.name;
   const ad=document.getElementById('aAddr'); if(ad)ad.value=currentUser?(currentUser.shippingAddress||''):''; 
+  // Human check at first sign-up only (Kevin, 2026-11-20): the "I'm a
+  // real person" box only shows when you're not signed in. Once you're
+  // signed up you never see it again — sign-in never asks for it.
+  const hr=document.getElementById('humanCheckRow'); if(hr)hr.style.display=currentUser?'none':'';
+  const hc=document.getElementById('aHuman'); if(hc&&!currentUser)hc.checked=false;
   if(!currentUser){const ps=document.getElementById('profileSec'); if(ps)ps.style.display='none';}
 }
 function loadSession(){try{const u=localStorage.getItem('btb_user');if(u)currentUser=JSON.parse(u);}catch(e){}}
@@ -65,11 +70,23 @@ async function authMe(){
 }
 function authMsg(t){const m=document.getElementById('authMsg');if(m)m.textContent=t||'';}
 async function signUp(){
+  // Human check at first sign-up only (Kevin, 2026-11-20): a checkbox to
+  // show you're a real person. It only shows when you're not signed in —
+  // once you're signed up you never see it again, and sign-in never
+  // asks for it. If you're already signed in, sign out first to make a
+  // new account.
+  if(currentUser){authMsg('You are already signed in — sign out first if you want to make a new account.');return;}
+  const hc=document.getElementById('aHuman');
+  if(!hc||!hc.checked){
+    authMsg('Tap the box to show you are a real person, then tap Sign up again.');
+    const h=document.getElementById('humanCheckRow'); if(h&&h.scrollIntoView)h.scrollIntoView({block:'nearest'});
+    return;
+  }
   // No security question at sign-up (Kevin, 2026-11-20): it only comes
   // up when you forget your password. A signed-in user can set one
   // later with "Change security question" if they want to reset their
   // own password; without one, a forgotten password is owner-reset only.
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:''});
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
