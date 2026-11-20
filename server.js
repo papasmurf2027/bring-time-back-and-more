@@ -513,7 +513,8 @@ app.post('/api/auth/signup', async (req, res) => {
   // against the same question over and over.
   const _ch = _signupChallenges.get(String(b.challengeId || ''));
   _signupChallenges.delete(String(b.challengeId || ''));
-  if (!_ch || _ch.expires < Date.now() || Number(b.challengeAnswer) !== _ch.answer) return res.json({ ok: false, error: 'answer the check question to sign up — it proves you are a person, not a script' });
+  if (!_ch || _ch.expires < Date.now() || String(b.challengeAnswer || '').trim() === '') return res.json({ ok: false, error: 'answer the check question to sign up — it proves you are a person, not a script' });
+  if (Number(b.challengeAnswer) !== _ch.answer) return res.json({ ok: false, error: 'that answer to the check was not right — a new sum is shown above, try that one' });
   const password = String(b.password || '');
   const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
   const shippingAddress = String(b.shippingAddress || b.address || '').trim().slice(0, 500);
