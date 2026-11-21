@@ -30,6 +30,9 @@
 <label>Email <input id="aEmail" type="email" placeholder="you@example.com"></label>
 <label style="display:none">Website <input id="aWebsite" tabindex="-1" autocomplete="off"></label>
 <label>Password <input id="aPass" type="password" placeholder="At least 8 characters"></label>
+<label>I want to</label>
+<div class="tiles" id="aRoleBar"><span class="tile" data-role="buyer" onclick="pickRole('buyer')">Buy</span><span class="tile" data-role="seller" onclick="pickRole('seller')">Sell</span><span class="tile active" data-role="both" onclick="pickRole('both')">Buy and sell</span></div>
+<input type="hidden" id="aRole" value="both">
 <label>Your real name and shipping address — your main address <input id="aAddr" placeholder="Real name, street, town/city, state, ZIP"></label><p class="small">Put your real name first, then your address — this is the name and address the seller ships to. It is the one used when you bid or buy. You can change it any time when you are signed in, and the change counts for future buys only. An item you already won always ships to the address that was on file when you won it.</p>
 <button class="btn ghost" onclick="saveAddress()">Save shipping address</button><br>
 <label id="humanCheckRow" style="display:block;margin:8px 0"><input type="checkbox" id="aHuman" style="width:20px;height:20px;vertical-align:middle"> I'm a real person</label>

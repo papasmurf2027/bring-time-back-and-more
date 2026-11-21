@@ -69,6 +69,10 @@ async function authMe(){
   syncSellerToken();
 }
 function authMsg(t){const m=document.getElementById('authMsg');if(m)m.textContent=t||'';}
+// Role bar at sign-up (Kevin, 2026-11-20): you have to join one — Buy,
+// Sell, or Buy and sell — picked from an open bar, not a hidden dropdown.
+// The tapped one turns gold. "Buy and sell" is picked to start.
+function pickRole(r){const h=document.getElementById('aRole');if(h)h.value=r;document.querySelectorAll('#aRoleBar .tile').forEach(t=>t.classList.toggle('active',t.getAttribute('data-role')===r));}
 async function signUp(){
   // Human check at first sign-up only (Kevin, 2026-11-20): a checkbox to
   // show you're a real person. It only shows when you're not signed in —
@@ -86,7 +90,7 @@ async function signUp(){
   // up when you forget your password. A signed-in user can set one
   // later with "Change security question" if they want to reset their
   // own password; without one, a forgotten password is owner-reset only.
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:'both',shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
@@ -102,9 +106,11 @@ async function signIn(){
 async function signOut(){try{await j('/api/auth/logout');}catch(e){}setSession(null);authMsg('Signed out.');const a=document.getElementById('authSec');if(a)a.scrollIntoView({behavior:'smooth',block:'start'});}
 async function saveAddress(){if(needSignIn())return;const r=await j('/api/auth/address',{address:document.getElementById('aAddr').value});if(!r.ok){authMsg('Error: '+r.error);return;}if(currentUser)currentUser.shippingAddress=r.shippingAddress;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}authMsg(r.shippingAddress?('Default shipping address saved — this is your main address now, and it counts for future buys. Items you already won still ship to the address on file when you won them.'):'Default shipping address cleared — add one before you bid or buy.');}
 // Switch a buyer account to buy-and-sell (Kevin, 2026-11-20): one tap on
-// My Profile, no second account, no waitlist. The same button works for
-// anyone who signed up as a buyer and wants to sell.
-async function switchToSeller(){if(needSignIn())return;const r=await j('/api/auth/role',{role:'both'});if(!r.ok){alert('Error: '+(r.error||'could not change your account'));return;}currentUser=r.user;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}renderAuth();loadProfile();alert('You can sell now — your account is Buyer and seller.');}
+// My Profile, no second account, no waitlist — but it needs a code emailed
+// to your account's email first. Ask for the code, type it in, then you
+// can sell. Until the site's email is set up, the code shows on screen
+// instead (manual mode); once email is set up it only comes by email.
+async function switchToSeller(){if(needSignIn())return;const r=await j('/api/auth/role-request',{role:'both'});if(!r.ok){alert('Error: '+(r.error||'could not ask for a switch code'));return;}const code=r.sent?prompt('We emailed a switch code to '+r.email+'. Type it here to switch to Buy and sell:'):prompt('Email is not set up on the site yet, so here is your switch code: '+r.code+'. Type it below to switch to Buy and sell:');if(!code)return;const r2=await j('/api/auth/role-confirm',{code});if(!r2.ok){alert('Error: '+(r2.error||'could not switch'));return;}currentUser=r2.user;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}renderAuth();loadProfile();alert('You can sell now — your account is Buyer and seller.');}
 async function forgotPw(){
   const email=document.getElementById('aEmail').value||prompt('Email for your account?');
   if(!email){authMsg('Type your email first, then tap Forgot password.');return;}
