@@ -568,9 +568,11 @@ async function savePayment(){
   renderAuth(); loadProfile();
 }
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
+function randomTimerSecondsValue(){const s=document.getElementById('sRandomTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sRandomTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
+function toggleRules(){var d=document.getElementById('rulesList');if(!d)return;var open=d.style.display!=='none';d.style.display=open?'none':'block';var b=document.getElementById('rulesToggleBtn');if(b)b.textContent=open?'Read the Rules':'Hide the Rules';}
 function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
 function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
-function agreeRules(){var a=document.getElementById('aAgree');if(a)a.checked=true;var sa=document.getElementById('sAgree');if(sa)sa.checked=true;var s=document.getElementById('agreeStatusSignup');if(s)s.textContent='✓ You agreed to the Rules.';var s2=document.getElementById('agreeStatus');if(s2)s2.textContent='✓ You agreed to the Rules.';closeRulesModal();}
+function agreeRules(){var a=document.getElementById('aAgree');if(a)a.checked=true;var sa=document.getElementById('sAgree');if(sa)sa.checked=true;var s=document.getElementById('agreeStatusSignup');if(s)s.textContent='✓ You agreed to the Rules.';var s2=document.getElementById('agreeStatus');if(s2)s2.textContent='✓ You agreed to the Rules.';var s3=document.getElementById('rulesAgreeStatus');if(s3)s3.textContent='✓ You agreed to the Rules.';closeRulesModal();}
 async function createListing(){
   if(needSignIn())return;
   // Rules agreement is at sign-up now (Kevin, 2026-11-20) — no more
@@ -592,13 +594,15 @@ async function createRandomItems(){
   if(needSignIn())return;
   // Rules agreement is at sign-up now (Kevin, 2026-11-20) — no more
   // agreeing every time someone lists.
-  // Shipping and condition are right here in the Random section now
-  // (Kevin, 2026-11-21) — package size + insured + condition, all in one
-  // spot to start the random. They no longer read the main form's
-  // #sSize/#sInsured/#sCond. Condition defaults to "Say it live in chat"
-  // (the Random way) — the seller can pick a real condition instead.
+  // Shipping, condition, category, starting bid, timer, mode and
+  // authenticity are all right here in the Random section now (Kevin,
+  // 2026-11-21) — everything to start the random, all in one spot, no
+  // scrolling up. They no longer read the main form's #sSize/#sInsured/
+  // #sCond/#sCat/#sStart/#sTimer/#sMode/#sAuth. Condition defaults to
+  // "Say it live in chat" (the Random way) — the seller can pick a real
+  // condition instead. Seller name still comes from the account.
   const size=document.getElementById('sRandomSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sRandomCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sRandomCat').value,startPrice:document.getElementById('sRandomStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sRandomAuth').value,condition:document.getElementById('sRandomCond').value,timerSeconds:randomTimerSecondsValue(),mode:document.getElementById('sRandomMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
   if(r.ok)load();
@@ -923,11 +927,12 @@ async function openItem(id){
   // a buyer only sees their own thread with this seller.
   let pms=[]; if(currentUser){try{const pr=await j('/api/listings/'+id+'/messages'); if(Array.isArray(pr))pms=pr;}catch(e){}}
   startPresence(id);
-  // The timer, the clock bid button and the custom bid sit at the BOTTOM of
-  // the item page, by the Live room — for Random Items and regular auctions
-  // alike — not up in the middle. (Kevin, 2026-11-20.) Built here, dropped
-  // in after the Live room below. Same ids (cdWrap, cdState, bAmt, tlAmt)
-  // so the hourglass tick and the bid buttons keep working.
+  // The timer, the clock bid button and the custom bid sit INSIDE the Live
+  // room, right under the video and above the chat — one screen, video +
+  // timer + bid + chat, no scrolling to find them (Kevin, 2026-11-21: the
+  // room was all over the place). This reverses the 2026-11-20 bottom
+  // placement. Same ids (cdWrap, cdState, bAmt, tlAmt) so the hourglass
+  // tick and the bid buttons keep working.
   const bidBox=(l.type==='auction'&&l.status!=='queued')?`<div style="border:2px solid #c9a227;border-radius:12px;padding:12px;margin-top:10px"><div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <button onclick="bid('${l.id}',1)" title="Tap to bid $1 more" style="width:104px;height:104px;border-radius:50%;border:4px solid #c9a227;background:#0a1628;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="52" height="52" viewBox="0 0 100 100" style="display:block"><circle cx="50" cy="50" r="44" fill="none" stroke="#c9a227" stroke-width="4"/><line x1="50" y1="50" x2="50" y2="24" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><line x1="50" y1="50" x2="70" y2="50" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="#f5d76e"/></svg><span style="color:#f5d76e;font-weight:bold;font-size:16px">+$1</span></button>
   <p class="small">Tap the clock to bid $1 more.</p>
@@ -946,7 +951,7 @@ async function openItem(id){
   :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`)
   :l.type==='auction'?(l.status==='queued'
   ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p class="small">Set it when this item comes up — only when switching to it, not before. The timer starts when you tap Start.</p><label>Start at $ <input id="startBid" type="number" min="0" value="${l.current_bid||l.start_price||0}"></label><label>How long <select id="startTimer" onchange="const c=document.getElementById('startTimerCustom');if(c)c.style.display=this.value==='custom'?'block':'none'"><option value="10"${(l.timer_seconds||30)===10?' selected':''}>10 seconds</option><option value="30"${(l.timer_seconds||30)===30?' selected':''}>30 seconds</option><option value="120"${(l.timer_seconds||30)===120?' selected':''}>2 minutes</option><option value="custom">Custom — type the seconds</option></select></label><label id="startTimerCustom" style="display:none">Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${l.timer_seconds||30}"></label><label>Mode <select id="startMode"><option${(l.mode||'Sudden Death')==='Sudden Death'?' selected':''}>Sudden Death</option><option${l.mode==='Regular'?' selected':''}>Regular</option></select></label><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p><button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
-  :`<p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p><p class="small">The timer and the bid buttons are at the bottom of the page, by the Live room.</p>`)
+  :`<p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>`)
   :`<p>Store price $${l.fixed_price} + $${l.shipping} shipping = $${l.fixed_price+l.shipping} total</p>
   <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p>
   <button class="btn green" onclick="buyNow('${l.id}')">Buy Now — check my payment first</button>`}
@@ -962,7 +967,7 @@ async function openItem(id){
   <p class="small">Scan this code with your phone — it opens this exact sale, so you ship the right item and don't box up the wrong order. This QR is a shipment record, not real ${carrierOf(l)} postage yet.</p>
   ${l.shipped_at?`<p><span class="badge green">Marked as shipped ${l.shipped_at}</span></p>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}
   <p id="shipMsg" class="small"></p></div>`:''}
-  <div style="border:2px solid #c9a227;border-radius:12px;padding:10px;margin-top:10px">
+  <div id="liveRoomBox" style="border:2px solid #c9a227;border-radius:12px;padding:10px;margin-top:10px">
   <h3 style="margin-top:0">🔴 Live room ${l.seller_live?'<span class="badge">LIVE NOW</span>':''}</h3>
   ${isSellerRoom&&l.seller_live?`<p id="watchingLine" style="color:#f5c542;font-weight:800;margin:6px 0">👥 ${l.watching||0} watching now</p>`:''}
   <div style="position:relative;background:#000;border-radius:10px;min-height:160px">
@@ -973,12 +978,12 @@ async function openItem(id){
   <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <button class="btn ghost" id="flipCamBtn" style="display:none" onclick="flipCamera()">🔄 Flip camera — front / back</button>
   <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
+  ${bidBox}
   <h3 style="margin-bottom:4px">Chat</h3><p class="small">Type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
   ${l.is_random&&isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:10px;margin-top:10px"><h3 style="margin-top:0">🎲 What is this Random Item?</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}<p class="small">Type what you're holding up live, so buyers know what they're bidding on — no scrolling up. This is saved on the receipt.</p><label>What it is <input id="revealedInput" placeholder="e.g. Invicta Lupah watch" value="${escHtml(l.revealed_item||'')}"></label><label>Condition <select id="revealedCond"><option value="">— Pick a condition —</option>${['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts'].map(c=>`<option${l.condition===c?' selected':''}>${c}</option>`).join('')}</select></label><button class="btn" onclick="revealItem('${l.id}')">Save what it is</button></div>`:''}
   </div>
-  ${bidBox}
   ${pmSection(l,pms)}
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
   <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store — fixed-price items</button>
@@ -1110,6 +1115,10 @@ async function goLive(id){
   setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
   startSellerPoll(id);
   startPresence(id);
+  // When you go live, the screen should just show the room — no scrolling
+  // to find it (Kevin, 2026-11-21). The Go Live button is at the bottom of
+  // the page, so bring the Live room into view.
+  const rb=document.getElementById('liveRoomBox'); if(rb)rb.scrollIntoView({behavior:'smooth',block:'start'});
   alert('You are LIVE NOW — buyers can see your camera.');
 }
 // Flip the camera while live (Kevin, 2026-11-20): front (face) or back
@@ -1249,6 +1258,7 @@ function copyLiveEmails(){
 }
 async function setTax(){const r=await oj('/api/settings/tax',{percent:Number(document.getElementById('taxPct').value)});alert(r.ok?'Tax % set to '+r.taxPercent:'Error: '+r.error);loadDash();}
 document.getElementById('sCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
+document.getElementById('sRandomCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
 load(); loadSession(); renderAuth(); authMe(); toggleFixedPrice(); setInterval(load,15000);
 // Owner dashboard is NOT listed on the site — only the owner opens it, by adding ?owner to the site address, then entering the owner password. Buyers and sellers never see it.
 (function(){const q=new URLSearchParams(location.search);if(q.has('owner'))setTimeout(()=>show('dash'),600);})();
