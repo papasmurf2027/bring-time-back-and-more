@@ -152,7 +152,11 @@ function toggleFixedPrice(){const t=document.getElementById('sType');const isSto
 // A seller's Store: show only that seller's fixed-price (Store) listings.
 function showSellerStore(seller){curType='buy_now';curSeller=seller||'';curCat='All';load();const t=document.getElementById('list');if(t)t.scrollIntoView({behavior:'smooth',block:'start'});}
 function clearSellerStore(){curSeller='';load();}
-async function j(u,o,headers){const r=await fetch(u,o?{method:'POST',headers:Object.assign({'Content-Type':'application/json'},sessionHeaders(),headers||{}),body:JSON.stringify(o)}:{headers:Object.assign({},sessionHeaders(),headers||{})});return r.json();}
+// j() never leaves the user staring at "Error: undefined" (Kevin,
+// 2026-11-20: Go Live showed that when it failed). If the request
+// itself fails, or the server answers ok:false with no error message,
+// it comes back as a clear sentence instead.
+async function j(u,o,headers){let r;try{r=await fetch(u,o?{method:'POST',headers:Object.assign({'Content-Type':'application/json'},sessionHeaders(),headers||{}),body:JSON.stringify(o)}:{headers:Object.assign({},sessionHeaders(),headers||{})});}catch(e){return{ok:false,error:'could not reach the site — check your connection and try again'};}let d;try{d=await r.json();}catch(e){return{ok:false,error:'the site answered in a way this page could not read — try again'};}if(d&&d.ok===false&&!d.error)d.error='something went wrong — try again';return d;}
 function show(w){document.getElementById('sellSec').style.display=w==='sell'?'block':'none';document.getElementById('dashSec').style.display=w==='dash'?'block':'none';document.getElementById('profileSec').style.display=w==='profile'?'block':'none';if(w==='buy'){curType='';curSeller='';load();}if(w==='store'){curType='buy_now';curSeller='';load();}if(w==='dash')loadDash();if(w==='profile')loadProfile();const target=w==='sell'?document.getElementById('sellSec'):w==='dash'?document.getElementById('dashSec'):w==='profile'?document.getElementById('profileSec'):document.getElementById('list');if(target){target.scrollIntoView({behavior:'smooth',block:'start'});}if(w==='sell'){const f=document.getElementById('sSeller');if(f){if(currentUser)f.value=currentUser.name;setTimeout(()=>f.focus(),400);}}}
 // My Profile (Kevin, 2026-11-20): one page that shows you're signed in,
 // who you are, what you bought and what you sold — each with its stage:
@@ -164,6 +168,10 @@ async function loadProfile(){
   const u=currentUser;
   let act={bought:[],sold:[]};
   try{const r=await j('/api/my-activity'); if(r&&r.ok)act=r;}catch(e){}
+  // Private message threads (Kevin, 2026-11-20): only the buyer and the
+  // seller see each thread — nobody else.
+  let threads=[];
+  try{const r=await j('/api/my-messages'); if(r&&r.ok&&Array.isArray(r.threads))threads=r.threads;}catch(e){}
   const roleName=u.role==='both'?'Buyer and seller':u.role==='seller'?'Seller':'Buyer';
   const itemRow=(l,other)=>{
     const price=l.price?('$'+l.price):'FREE';
@@ -204,7 +212,9 @@ async function showReceipt(id){
     <h3>What I bought (${act.bought.length})</h3>
     ${act.bought.length?act.bought.map(l=>itemRow(l,'from '+l.seller)).join(''):'<p class="small">Nothing bought yet.</p>'}
     <h3>What I sold (${act.sold.length})</h3>
-    ${act.sold.length?act.sold.map(l=>itemRow(l,'to '+(l.winner||'—'))).join(''):'<p class="small">Nothing sold yet.</p>'}`;
+    ${act.sold.length?act.sold.map(l=>itemRow(l,'to '+(l.winner||'—'))).join(''):'<p class="small">Nothing sold yet.</p>'}
+    <h3>My private messages (${threads.length})</h3>
+    ${threads.length?threads.map(t=>`<p><b>${escHtml(t.title)}</b> — with ${escHtml(t.other)} • ${t.count} message${t.count===1?'':'s'}<br><span class="small">Latest: ${escHtml(t.lastMessage)}</span> <button class="btn ghost" onclick="openItem('${t.listingId}')">Open messages</button></p>`).join(''):'<p class="small">No private messages yet — message a seller from their item page.</p>'}`;
 }
 async function load(){
   const o=await j('/api/overview');
@@ -758,6 +768,10 @@ async function openItem(id){
   liveListingId=id;
   const l=await j('/api/listings/'+id);
   const isSellerRoom=currentUser&&(l.seller_user_id?currentUser.id===l.seller_user_id:currentUser.name===l.seller);
+  // Private messages about this item (Kevin, 2026-11-20): only the buyer
+  // and the seller ever see them. The seller sees every buyer's thread;
+  // a buyer only sees their own thread with this seller.
+  let pms=[]; if(currentUser){try{const pr=await j('/api/listings/'+id+'/messages'); if(Array.isArray(pr))pms=pr;}catch(e){}}
   startPresence(id);
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
@@ -799,6 +813,7 @@ async function openItem(id){
   <h3>Chat room ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3><p class="small">Live video + live chat — type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Your name <input id="cName"></label><label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
+  ${pmSection(l,pms)}
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
   <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store — fixed-price items</button>
   <p><button class="btn ghost" onclick="report('${l.id}')">Report this listing</button> <button class="btn ghost" onclick="score('${escJs(l.seller)}')">Seller Scorecard</button>${ownerPw()?` <button class="btn ghost" onclick="confirmBad('${l.id}')">Confirm bad listing — fake / stolen / banned (owner)</button>`:''}</p>
@@ -838,12 +853,36 @@ async function rerun(id,seller){const r=await j('/api/listings/'+id+'/rerun',{se
 function returnPick(){const ph=document.getElementById('retPhoto');const vd=document.getElementById('retVideo');window._retPhoto=ph&&ph.files&&ph.files[0]?ph.files[0].name:'';window._retVideo=vd&&vd.files&&vd.files[0]?vd.files[0].name:'';const b=document.getElementById('retBtn');if(b)b.disabled=!(window._retPhoto&&window._retVideo);const m=document.getElementById('retProofMsg');if(m)m.textContent=(window._retPhoto&&window._retVideo)?'Video + label picture attached — you can mark the return shipped.':'Attach BOTH the video and the label picture — the button stays locked until both are attached.';}
 function disputePick(){const ph=document.getElementById('dspPhoto');const vd=document.getElementById('dspVideo');window._dspPhoto=ph&&ph.files&&ph.files[0]?ph.files[0].name:'';window._dspVideo=vd&&vd.files&&vd.files[0]?vd.files[0].name:'';const b=document.getElementById('dspBtn');if(b)b.disabled=!(window._dspPhoto&&window._dspVideo);const m=document.getElementById('dspProofMsg');if(m)m.textContent=(window._dspPhoto&&window._dspVideo)?'Photo + video attached — you can flag the wrong item.':'Attach BOTH a photo and a video — the button stays locked until both are attached.';}
 async function flagWrongItem(rfId,seller){const r=await j('/api/refunds/'+rfId+'/wrong-item',{seller,photoName:window._dspPhoto,videoName:window._dspVideo},sellerHeaders(seller));noteSellerToken(seller,r);const m=document.getElementById('dspMsg');if(m)m.textContent=r.ok?'Wrong item flagged — the refund is paused and the owner will decide. The 48-hour auto-release is stopped.':'Error: '+r.error;if(r.ok){if(curItemId())openItem(curItemId());else loadDash();}else alert('Error: '+r.error);}
-async function ojDel(u){let r;try{const res=await fetch(u,{method:'DELETE',headers:Object.assign({},sessionHeaders(),ownerHeaders())});r=await res.json();}catch(e){r={ok:false,error:'request failed'};}if(r&&!r.ok&&(r.error==='owner password required'||r.error==='owner password not set')){const p=prompt('Owner password? (the OWNER_PASSWORD you set in Railway — it stays on this device only)');if(p){try{sessionStorage.setItem('btb_owner_pw',p);}catch(e){}try{const res=await fetch(u,{method:'DELETE',headers:Object.assign({},sessionHeaders(),ownerHeaders())});r=await res.json();}catch(e){}}}return r;}
+async function ojDel(u){let r;try{const res=await fetch(u,{method:'DELETE',headers:Object.assign({},sessionHeaders(),ownerHeaders())});r=await res.json();}catch(e){r={ok:false,error:'request failed'};}if(r&&r.ok===false&&!r.error)r.error='something went wrong — try again';if(r&&!r.ok&&(r.error==='owner password required'||r.error==='owner password not set')){const p=prompt('Owner password? (the OWNER_PASSWORD you set in Railway — it stays on this device only)');if(p){try{sessionStorage.setItem('btb_owner_pw',p);}catch(e){}try{const res=await fetch(u,{method:'DELETE',headers:Object.assign({},sessionHeaders(),ownerHeaders())});r=await res.json();if(r&&r.ok===false&&!r.error)r.error='something went wrong — try again';}catch(e){}}}return r;}
 async function ownerDeleteListing(){const id=document.getElementById('delListingId').value.trim();if(!id){alert('Type a listing id first.');return;}if(!confirm('Remove this listing? This cannot be undone.'))return;const r=await ojDel('/api/listings/'+encodeURIComponent(id));alert(r.ok?r.message:('Error: '+r.error));loadDash();}
 async function ownerDeleteChat(){const id=document.getElementById('delChatId').value.trim();if(!id){alert('Type a chat message id first.');return;}const r=await ojDel('/api/chats/'+encodeURIComponent(id));alert(r.ok?r.message:('Error: '+r.error));}
 async function ownerDecideRefund(rfId,decision){const r=await oj('/api/refunds/'+rfId+'/owner-decide',{decision});alert(r.ok?(decision==='approve'?'Never-arrived refund approved — released from the seller\'s escrow money.':'Never-arrived refund denied — no refund.'):'Error: '+r.error);loadDash();}
 async function decideDispute(rfId,decision){const r=await oj('/api/refunds/'+rfId+'/dispute-decide',{decision});alert(r.ok?(decision==='wrong'?'Refund denied — the buyer sent the wrong item. A new return label was sent and the buyer must send the right item back within 7 days, or no refund.':'Item is correct — claim not upheld, refund released. Recorded against the seller: that sale is not a clean sale, the seller drops a tier, it is on their Seller Scorecard, and selling privileges are suspended for 7 days after a first incorrect claim, 30 days after a second, and removed after a third.'):'Error: '+r.error);loadDash();}
 async function chat(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/chat',{message:document.getElementById('cMsg').value});if(!r.ok){alert('Error: '+r.error);return;}openItem(id);}
+// Private messages on the item page (Kevin, 2026-11-20): only the buyer
+// and the seller ever see them. A buyer messages the seller; the seller
+// sees each buyer's thread and replies to that buyer.
+function pmSection(l,pms){
+  if(!currentUser) return `<h3>Message seller (private)</h3><p class="small">Sign in to message ${escHtml(l.seller)} privately — only you and the seller see it.</p>`;
+  const isSeller=currentUser.name===l.seller;
+  if(isSeller){
+    if(!pms.length) return `<h3>Private messages about this item</h3><p class="small">No private messages yet — when a buyer messages you about this item, it shows here. Only you and that buyer see it.</p>`;
+    const byBuyer={};
+    for(const m of pms){const b=m.sender===l.seller?m.recipient:m.sender;(byBuyer[b]=byBuyer[b]||[]).push(m);}
+    const buyers=Object.keys(byBuyer);
+    return `<h3>Private messages about this item</h3><p class="small">Only you and each buyer see their own messages — nobody else.</p>`+buyers.map((b,i)=>`<div style="border:1px solid #c9a227;border-radius:10px;padding:10px;margin-top:8px"><b>${escHtml(b)}</b>${byBuyer[b].map(m=>`<p><b>${escHtml(m.sender)}${m.sender===l.seller?' (you)':''}:</b> ${escHtml(m.message)}</p>`).join('')}<label>Reply to ${escHtml(b)} <input id="pmMsg_s${i}" placeholder="Type a private reply"></label><button class="btn" onclick="sendPrivateMessage('${l.id}','${escJs(b)}','pmMsg_s${i}')">Send private reply</button></div>`).join('');
+  }
+  return `<h3>Message ${escHtml(l.seller)} (private)</h3><p class="small">Only you and the seller see this — nobody else, not even in the public chat.</p><div class="chat">${pms.map(m=>`<p><b>${escHtml(m.sender)}${m.sender===l.seller?' (seller)':''}:</b> ${escHtml(m.message)}</p>`).join('')||'<p class="small">No messages yet.</p>'}</div><label>Message <input id="pmMsg" placeholder="Ask about the item, shipping, anything"></label><button class="btn" onclick="sendPrivateMessage('${l.id}','','pmMsg')">Send private message</button>`;
+}
+async function sendPrivateMessage(id,to,inputId){
+  if(needSignIn())return;
+  const el=document.getElementById(inputId);
+  const msg=el?el.value:'';
+  if(!msg.trim()){alert('Type a message first.');return;}
+  const r=await j('/api/listings/'+id+'/message',{message:msg,to:to||undefined});
+  if(!r.ok){alert('Error: '+r.error);return;}
+  openItem(id);
+}
 async function goLive(id){
   if(needSignIn())return;
   const seller=authName()||document.getElementById('cName').value;
