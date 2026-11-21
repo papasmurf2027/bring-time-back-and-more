@@ -1,6 +1,9 @@
 function escHtml(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');}
 // For names inside a single-quoted onclick JS string: escape backslash and quote (HTML escaping alone is not enough there).
 function escJs(s){return String(s||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'\"');}
+// Profile picture next to a name (Kevin, 2026-11-20): a small round
+// picture. Returns nothing when the user has no picture set.
+function sellerPhotoImg(photo,size){return photo?`<img src="${escHtml(photo)}" alt="" style="width:${size||28}px;height:${size||28}px;border-radius:50%;object-fit:cover;vertical-align:middle;margin-right:6px">`:'';}
 // Seller token: issued once by the server when a seller first lists or
 // claims a founding spot, kept in localStorage keyed by seller name, and
 // sent as x-seller-token on seller-only actions. Owner password: kept in
@@ -214,8 +217,17 @@ async function showReceipt(id){
   box.scrollIntoView({behavior:'smooth',block:'start'});
 }
   box.innerHTML=`
-    <p style="font-size:20px;margin:0 0 4px"><b>You're signed in as ${escHtml(u.name)}</b></p>
+    <p style="font-size:20px;margin:0 0 4px">${sellerPhotoImg(u.photo,72)}<b>You're signed in as ${escHtml(u.name)}</b></p>
     <p>${roleName} • ${escHtml(u.email)}</p>
+    <h3>Your name and picture</h3>
+    <p class="small">Your username is what people see next to your listings, bids and messages. Your picture shows next to your name. Changing your username changes it everywhere — your old listings, bids and messages show the new name too.</p>
+    <label>Username <input id="newName" value="${escHtml(u.name)}" maxlength="100"></label>
+    <button class="btn" onclick="changeUsername()">Change username</button>
+    <span id="nameMsg" class="small"></span>
+    <p><label>Picture <input id="photoFile" type="file" accept="image/*" onchange="pickProfilePhoto(this)"></label>
+    <button class="btn" onclick="changePhoto()">Change picture</button>
+    ${u.photo?`<button class="btn ghost" onclick="removePhoto()">Remove picture</button>`:''}
+    <span id="photoMsg" class="small"></span></p>
     ${u.role==='buyer'?`<p><b>You signed up as a buyer, so you can't list yet.</b> <button class="btn" onclick="switchToSeller()">I want to sell too</button></p>`:''}
     <p><b>Real name and shipping address:</b> ${u.shippingAddress?escHtml(u.shippingAddress):'— not set yet. Add it in Your account below.'}</p>
     <h3>What I bought (${act.bought.length})</h3>
@@ -229,7 +241,7 @@ async function load(){
   const o=await j('/api/overview');
   document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. 0% until it goes live, then 5% forever. Normal fee 10%.`;
   let followed=new Set(); if(currentUser){try{const f=await j('/api/following/'+encodeURIComponent(currentUser.name)); if(Array.isArray(f))f.forEach(x=>followed.add(x.seller));}catch(e){}}
-  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.seller_present).map(l=>`<p><span class="badge">🔴 LIVE NOW</span> <b>${escHtml(l.seller)}</b>${followed.has(l.seller)?' <span class="badge gold">Keeping track</span>':''} — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
+  document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.seller_present).map(l=>`<p><span class="badge">🔴 LIVE NOW</span> ${sellerPhotoImg(l.seller_photo,28)}<b>${escHtml(l.seller)}</b>${followed.has(l.seller)?' <span class="badge gold">Keeping track</span>':''} — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   // Giveaways (wheel) live only in the seller's room, never as cards on the
   // main page — the main grid shows auctions and Store items only.
@@ -237,7 +249,7 @@ async function load(){
   let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
   document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
-  <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
+  <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
@@ -466,6 +478,39 @@ function drawQR(text,canvas){
 }
 window._photoData='';
 function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const img=new Image();const rd=new FileReader();rd.onload=e=>{img.onload=()=>{const max=800;const sc=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);c.getContext('2d').drawImage(img,0,0,c.width,c.height);window._photoData=c.toDataURL('image/jpeg',0.8);const p=document.getElementById('sPhotoPrev');p.src=window._photoData;p.style.display='block';};img.src=e.target.result;};rd.readAsDataURL(f);}
+// Change username + profile picture (Kevin, 2026-11-20): from My Profile.
+// The username change updates the name everywhere it appears. The picture
+// is resized small (200px) before upload so it stays light.
+async function changeUsername(){
+  const m=document.getElementById('nameMsg'); if(m)m.textContent='';
+  const name=(document.getElementById('newName')||{}).value||'';
+  const r=await j('/api/auth/username',{name});
+  if(!r.ok){if(m)m.textContent='Error: '+(r.error||'could not change it');return;}
+  currentUser=r.user; try{localStorage.setItem('btb_user',JSON.stringify(r.user));}catch(e){}
+  if(m)m.textContent='Username changed to '+r.user.name+'.';
+  renderAuth(); syncSellerToken(); loadProfile(); load();
+}
+function pickProfilePhoto(input){const f=input.files&&input.files[0];if(!f)return;const img=new Image();const rd=new FileReader();rd.onload=e=>{img.onload=()=>{const max=200;const sc=Math.min(1,max/Math.max(img.width,img.height));const c=document.createElement('canvas');c.width=Math.round(img.width*sc);c.height=Math.round(img.height*sc);c.getContext('2d').drawImage(img,0,0,c.width,c.height);window._profilePhotoData=c.toDataURL('image/jpeg',0.8);const m=document.getElementById('photoMsg');if(m)m.textContent='Picture picked — tap Change picture to save it.';};img.src=e.target.result;};rd.readAsDataURL(f);}
+async function changePhoto(){
+  const m=document.getElementById('photoMsg'); if(m)m.textContent='';
+  const photo=window._profilePhotoData||'';
+  if(!photo){if(m)m.textContent='Pick a picture first.';return;}
+  const r=await j('/api/auth/photo',{photo});
+  if(!r.ok){if(m)m.textContent='Error: '+(r.error||'could not save it');return;}
+  currentUser=r.user; try{localStorage.setItem('btb_user',JSON.stringify(r.user));}catch(e){}
+  window._profilePhotoData='';
+  if(m)m.textContent='Picture saved.';
+  renderAuth(); loadProfile(); load();
+}
+async function removePhoto(){
+  const m=document.getElementById('photoMsg'); if(m)m.textContent='';
+  const r=await j('/api/auth/photo',{photo:''});
+  if(!r.ok){if(m)m.textContent='Error: '+(r.error||'could not remove it');return;}
+  currentUser=r.user; try{localStorage.setItem('btb_user',JSON.stringify(r.user));}catch(e){}
+  window._profilePhotoData='';
+  if(m)m.textContent='Picture removed.';
+  renderAuth(); loadProfile(); load();
+}
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
 function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
 function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
@@ -801,7 +846,7 @@ async function openItem(id){
   let pms=[]; if(currentUser){try{const pr=await j('/api/listings/'+id+'/messages'); if(Array.isArray(pr))pms=pr;}catch(e){}}
   startPresence(id);
   const el=document.getElementById('detail'); el.scrollIntoView();
-  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
+  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${l.type==='wheel'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
