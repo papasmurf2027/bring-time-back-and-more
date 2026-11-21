@@ -880,11 +880,22 @@ async function spinWheel(id){
   },4300);
 }
 async function openItem(id){
-  const wasLive=liveListingId===id&&(liveRole==='seller'||liveRole==='viewer');
-  if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
-  liveListingId=id; lastAutoAdvanceId=null;
+  // Fetch first so we know whose item this is. When the live seller moves
+  // to their own next item (auto-advance: Random Item 1 ends, the room goes
+  // to Random Item 2), the camera KEEPS running — the show goes on, it does
+  // not cut out. Only stop the stream when leaving the show entirely.
   const l=await j('/api/listings/'+id);
   const isSellerRoom=currentUser&&(l.seller_user_id?currentUser.id===l.seller_user_id:currentUser.name===l.seller);
+  const sameShow=liveRole==='seller'&&liveStream&&isSellerRoom;
+  const wasLive=(liveListingId===id||sameShow)&&(liveRole==='seller'||liveRole==='viewer');
+  if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
+  if(sameShow){ // moving to your own next item: close the old viewer
+    // connections (viewers re-join on the new item), but the camera stream
+    // itself keeps running — it is not stopped.
+    for(const k of Object.keys(livePCs)){try{livePCs[k].close();}catch(e){}}
+    livePCs={};
+  }
+  liveListingId=id; lastAutoAdvanceId=null;
   // Private messages about this item (Kevin, 2026-11-20): only the buyer
   // and the seller ever see them. The seller sees every buyer's thread;
   // a buyer only sees their own thread with this seller.
@@ -898,7 +909,7 @@ async function openItem(id){
   ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start giveaway — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready. The timer starts then, and only this giveaway runs.</p>`:`<p class="small">The seller starts this giveaway when they're ready — stay in the room.</p>`}<p><b>FREE giveaway — no bidding.</b> Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
   :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`)
   :l.type==='auction'?(l.status==='queued'
-  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready to show this item. The timer starts then, and only this item runs.</p>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
+  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p class="small">Set it when this item comes up — only when switching to it, not before. The timer starts when you tap Start.</p><label>Start at $ <input id="startBid" type="number" min="0" value="${l.current_bid||l.start_price||0}"></label><label>How long <select id="startTimer" onchange="const c=document.getElementById('startTimerCustom');if(c)c.style.display=this.value==='custom'?'block':'none'"><option value="10"${(l.timer_seconds||30)===10?' selected':''}>10 seconds</option><option value="30"${(l.timer_seconds||30)===30?' selected':''}>30 seconds</option><option value="120"${(l.timer_seconds||30)===120?' selected':''}>2 minutes</option><option value="custom">Custom — type the seconds</option></select></label><label id="startTimerCustom" style="display:none">Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${l.timer_seconds||30}"></label><label>Mode <select id="startMode"><option${(l.mode||'Sudden Death')==='Sudden Death'?' selected':''}>Sudden Death</option><option${l.mode==='Regular'?' selected':''}>Regular</option></select></label><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p><button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
   :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <button onclick="bid('${l.id}',1)" title="Tap to bid $1 more" style="width:104px;height:104px;border-radius:50%;border:4px solid #c9a227;background:#0a1628;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="52" height="52" viewBox="0 0 100 100" style="display:block"><circle cx="50" cy="50" r="44" fill="none" stroke="#c9a227" stroke-width="4"/><line x1="50" y1="50" x2="50" y2="24" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><line x1="50" y1="50" x2="70" y2="50" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="#f5d76e"/></svg><span style="color:#f5d76e;font-weight:bold;font-size:16px">+$1</span></button>
   <p class="small">Tap the clock to bid $1 more.</p>
@@ -970,7 +981,24 @@ async function buyNow(id){if(needSignIn())return;const r=await j('/api/listings/
 async function startAuction(id){
   if(needSignIn())return;
   const seller=authName();
-  const r=await j('/api/listings/'+id+'/start',{},sellerHeaders(seller));
+  // Start settings (Kevin, 2026-11-20): the seller sets the starting bid,
+  // how long, and Regular or Sudden Death when the item comes up — only
+  // when switching to it. Read from the Start panel if it is on the page
+  // (queued auction, seller view); otherwise the server uses what was set
+  // when the item was listed.
+  const body={};
+  const bidEl=document.getElementById('startBid');
+  if(bidEl&&bidEl.value!=='')body.startPrice=Number(bidEl.value);
+  const tEl=document.getElementById('startTimer');
+  if(tEl){
+    if(tEl.value==='custom'){
+      const sEl=document.getElementById('startTimerSecs');
+      if(sEl&&sEl.value!=='')body.timerSeconds=Number(sEl.value);
+    } else body.timerSeconds=Number(tEl.value);
+  }
+  const mEl=document.getElementById('startMode');
+  if(mEl&&mEl.value)body.mode=mEl.value;
+  const r=await j('/api/listings/'+id+'/start',body,sellerHeaders(seller));
   noteSellerToken(seller,r);
   if(!r.ok){alert('Error: '+r.error);return;}
   openItem(id);
