@@ -1071,6 +1071,12 @@ app.get('/api/my-activity', async (req, res) => {
   if (!u) return res.status(401).json({ ok: false, error: 'not signed in' });
   const bought = await query("SELECT * FROM listings WHERE (winner_user_id=$1 OR winner=$2) AND status='sold' ORDER BY created_at DESC", [u.id, u.name]);
   const sold = await query("SELECT * FROM listings WHERE seller=$1 AND status='sold' ORDER BY created_at DESC", [u.name]);
+  // Won but not paid yet (Kevin, 2026-11-21): an auction winner whose
+  // payment has not gone through is status='ended', not 'sold', so they
+  // never showed in What I bought at all — nothing told them they won
+  // and need to pay. These come back as wonUnpaid so the profile can
+  // show a "You won!" box with a Pay now button.
+  const wonUnpaid = await query("SELECT * FROM listings WHERE (winner_user_id=$1 OR winner=$2) AND status='ended' AND payment_status='awaiting_payment' ORDER BY created_at DESC", [u.id, u.name]);
   // Which of these sold items have been rated (a Scorecard review left for
   // the sale) — so the profile can show the Rated step in the process.
   // (Kevin, 2026-11-20: the inbox shows Won → Shipped → Tracking → Rated → Final.)
@@ -1098,7 +1104,7 @@ app.get('/api/my-activity', async (req, res) => {
     delivered: !!l.delivered, shipped: !!l.shipped_at, rated: _rated.has(l.id),
     created_at: l.created_at, image_url: l.image_url || ''
   });
-  res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean) });
+  res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean), wonUnpaid: wonUnpaid.map(clean) });
 });
 // Profile picture next to a seller's name (Kevin, 2026-11-20): look up
 // each listing's seller in users by name and attach their photo as
