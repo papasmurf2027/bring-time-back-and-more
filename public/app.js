@@ -588,7 +588,9 @@ async function revealItem(id){
   if(needSignIn())return;
   const seller=authName();
   const revealed=document.getElementById('revealedInput').value;
-  const r=await j('/api/listings/'+id+'/reveal',{seller,revealedItem:revealed},sellerHeaders(seller)); noteSellerToken(seller,r);
+  const condEl=document.getElementById('revealedCond');
+  const condition=condEl?condEl.value:'';
+  const r=await j('/api/listings/'+id+'/reveal',{seller,revealedItem:revealed,condition},sellerHeaders(seller)); noteSellerToken(seller,r);
   if(!r.ok){alert('Error: '+r.error);return;}
   openItem(id);
 }
@@ -890,7 +892,7 @@ async function openItem(id){
   startPresence(id);
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
-  ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
+  ${l.is_random&&l.revealed_item?`<p><b>🎲 Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${l.type==='wheel'?(l.status==='queued'
   ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start giveaway — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready. The timer starts then, and only this giveaway runs.</p>`:`<p class="small">The seller starts this giveaway when they're ready — stay in the room.</p>`}<p><b>FREE giveaway — no bidding.</b> Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
@@ -934,6 +936,7 @@ async function openItem(id){
   <h3 style="margin-bottom:4px">Chat</h3><p class="small">Type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
+  ${l.is_random&&isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:10px;margin-top:10px"><h3 style="margin-top:0">🎲 What is this Random Item?</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}<p class="small">Type what you're holding up live, so buyers know what they're bidding on — no scrolling up. This is saved on the receipt.</p><label>What it is <input id="revealedInput" placeholder="e.g. Invicta Lupah watch" value="${escHtml(l.revealed_item||'')}"></label><label>Condition <select id="revealedCond"><option value="">— Pick a condition —</option>${['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts'].map(c=>`<option${l.condition===c?' selected':''}>${c}</option>`).join('')}</select></label><button class="btn" onclick="revealItem('${l.id}')">Save what it is</button></div>`:''}
   </div>
   ${pmSection(l,pms)}
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
