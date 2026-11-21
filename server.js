@@ -1077,6 +1077,16 @@ app.get('/api/my-activity', async (req, res) => {
   // and need to pay. These come back as wonUnpaid so the profile can
   // show a "You won!" box with a Pay now button.
   const wonUnpaid = await query("SELECT * FROM listings WHERE (winner_user_id=$1 OR winner=$2) AND status='ended' AND payment_status='awaiting_payment' ORDER BY created_at DESC", [u.id, u.name]);
+  // Waiting for payment (Kevin, 2026-11-21): the SELLER's ended auctions
+  // whose winner has not paid yet (awaiting_payment) or whose payment
+  // failed (declined). These never showed in What I sold (only 'sold'
+  // items do), so the seller had no way to find a win that was never paid
+  // for — and no way to ask the buyer to fix it or re-run it. These come
+  // back as needsPayment so the profile can show a red payment indicator
+  // with Ask them to fix it and Rerun buttons. No timer on the site — the
+  // buyer says in the chat how long they need, the seller decides when
+  // to re-run.
+  const needsPayment = await query("SELECT * FROM listings WHERE seller=$1 AND status='ended' AND payment_status IN ('awaiting_payment','declined') ORDER BY created_at DESC", [u.name]);
   // Which of these sold items have been rated (a Scorecard review left for
   // the sale) — so the profile can show the Rated step in the process.
   // (Kevin, 2026-11-20: the inbox shows Won → Shipped → Tracking → Rated → Final.)
@@ -1100,11 +1110,12 @@ app.get('/api/my-activity', async (req, res) => {
     price: l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0),
     shipping: l.shipping || 0,
     seller: l.seller, winner: l.winner,
+    payment: l.payment_status || 'none',
     stage: stageOf(l), tracking: l.tracking || '', carrier: l.carrier || '',
     delivered: !!l.delivered, shipped: !!l.shipped_at, rated: _rated.has(l.id),
     created_at: l.created_at, image_url: l.image_url || ''
   });
-  res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean), wonUnpaid: wonUnpaid.map(clean) });
+  res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean), wonUnpaid: wonUnpaid.map(clean), needsPayment: needsPayment.map(clean) });
 });
 // Profile picture next to a seller's name (Kevin, 2026-11-20): look up
 // each listing's seller in users by name and attach their photo as
