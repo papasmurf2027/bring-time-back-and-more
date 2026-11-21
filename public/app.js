@@ -254,7 +254,7 @@ async function load(){
   // main page — the main grid shows auctions and Store items only.
   // A seller's Store (curSeller) shows only that seller's fixed-price items.
   let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
-  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}
+  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
@@ -291,8 +291,8 @@ function setCat(c){curCat=c;load();}
 // Parts. Old listings made before this rule have no condition stored; the
 // display fallback below ('Used – Working') is display-only and never
 // changes a seller's stated condition in the database.
-const CONDITIONS=['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts'];
-function conditionOf(l){return CONDITIONS.includes(l&&l.condition)?l.condition:'Used – Working';}
+const CONDITIONS=['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts','Say it live in chat'];
+function conditionOf(l){if(l&&l.condition==='Say it live in chat')return 'Say it live in chat';return CONDITIONS.includes(l&&l.condition)?l.condition:'Used – Working';}
 // No cancellation / no refund for change of mind (Kevin, 2026-11-19):
 // the seller can mark a listing that way. It is shown on the card and the
 // item page before anyone bids. Legit reasons still get a refund.
@@ -361,6 +361,24 @@ function updateHourglasses(){
   const room=document.querySelector('svg.hg-room');
   const st=document.getElementById('cdState');
   if(room&&st){const ms=new Date(room.dataset.hgEnds).getTime()-Date.now();st.textContent=ms>0?'Gold sand running down — time left in this auction.':'Auction ended.';}
+  maybeAutoAdvance();
+}
+// Auto-advance (Kevin, 2026-11-20): when the item in the room ends, move
+// to the seller's next queued item on its own — no scrolling down to find
+// it. Only once per item, so it never loops.
+let lastAutoAdvanceId=null;
+async function maybeAutoAdvance(){
+  const room=document.querySelector('svg.hg-room');
+  if(!room)return;
+  const id=liveListingId; if(!id)return;
+  if(lastAutoAdvanceId===id)return;
+  const ms=new Date(room.dataset.hgEnds).getTime()-Date.now();
+  if(ms>0)return;
+  lastAutoAdvanceId=id;
+  try{
+    const r=await j('/api/listings/'+id+'/next');
+    if(r.ok&&r.next){openItem(r.next.id);}
+  }catch(e){}
 }
 if(!window._hgTick){window._hgTick=setInterval(updateHourglasses,250);}
 
@@ -862,7 +880,7 @@ async function spinWheel(id){
 async function openItem(id){
   const wasLive=liveListingId===id&&(liveRole==='seller'||liveRole==='viewer');
   if(!wasLive)stopLiveFull(); else stopLivePoll(); // re-render keeps the stream/PCs, restarts polling below
-  liveListingId=id;
+  liveListingId=id; lastAutoAdvanceId=null;
   const l=await j('/api/listings/'+id);
   const isSellerRoom=currentUser&&(l.seller_user_id?currentUser.id===l.seller_user_id:currentUser.name===l.seller);
   // Private messages about this item (Kevin, 2026-11-20): only the buyer
@@ -874,14 +892,18 @@ async function openItem(id){
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.status==='sold'&&l.payment_status==='validated'?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>🎲 What they won</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b> — that is what ${escHtml(l.winner)} won.</p>`:`<p>Random Item — revealed live on camera, seller to confirm what it was.</p><label>What they won (seller only — type the item you held up live) <input id="revealedInput" placeholder="e.g. Invicta Lupah watch"></label><button class="btn" onclick="revealItem('${l.id}')">Save what they won</button>`}</div>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
-  ${l.type==='wheel'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
-  :l.type==='auction'?`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
+  ${l.type==='wheel'?(l.status==='queued'
+  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start giveaway — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready. The timer starts then, and only this giveaway runs.</p>`:`<p class="small">The seller starts this giveaway when they're ready — stay in the room.</p>`}<p><b>FREE giveaway — no bidding.</b> Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
+  :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`)
+  :l.type==='auction'?(l.status==='queued'
+  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready to show this item. The timer starts then, and only this item runs.</p>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
+  :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>
   <button onclick="bid('${l.id}',1)" title="Tap to bid $1 more" style="width:104px;height:104px;border-radius:50%;border:4px solid #c9a227;background:#0a1628;cursor:pointer;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:2px"><svg width="52" height="52" viewBox="0 0 100 100" style="display:block"><circle cx="50" cy="50" r="44" fill="none" stroke="#c9a227" stroke-width="4"/><line x1="50" y1="50" x2="50" y2="24" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><line x1="50" y1="50" x2="70" y2="50" stroke="#f5d76e" stroke-width="5" stroke-linecap="round"/><circle cx="50" cy="50" r="5" fill="#f5d76e"/></svg><span style="color:#f5d76e;font-weight:bold;font-size:16px">+$1</span></button>
   <p class="small">Tap the clock to bid $1 more.</p>
   <label>Custom bid $ <input id="bAmt" type="number" value="${l.current_bid+1}"></label>
   <button class="btn" onclick="bidCustom('${l.id}')">Place custom bid</button>
   <p class="small">My Top Limit: set a max and the system bids the smallest step for you.</p>
-  <label>My Top Limit $ <input id="tlAmt" type="number"></label><button class="btn ghost" onclick="setTop('${l.id}')">Set My Top Limit</button>`
+  <label>My Top Limit $ <input id="tlAmt" type="number"></label><button class="btn ghost" onclick="setTop('${l.id}')">Set My Top Limit</button>`)
   :`<p>Store price $${l.fixed_price} + $${l.shipping} shipping = $${l.fixed_price+l.shipping} total</p>
   <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p>
   <button class="btn green" onclick="buyNow('${l.id}')">Buy Now — check my payment first</button>`}
@@ -939,6 +961,17 @@ async function bid(id,add){if(needSignIn())return;const l=await j('/api/listings
 async function bidCustom(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/bid',{amount:Number(document.getElementById('bAmt').value)});alert(r.ok?`Bid placed: $${r.currentBid}`:'Error: '+r.error);openItem(id);}
 async function setTop(id){if(needSignIn())return;const r=await j('/api/top-limit',{listingId:id,maxAmount:Number(document.getElementById('tlAmt').value)});alert(r.ok?'My Top Limit set':'Error: '+r.error);}
 async function buyNow(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/buy-now',{});alert(r.ok?`Sale complete — $${r.total} in escrow. Receipt ${r.receiptNo}`:'Error: '+r.error);openItem(id);}
+// Start auction (Kevin, 2026-11-20): the seller taps this in the room to
+// start one queued item's timer. When it ends, the room moves to the next
+// item on its own — no scrolling — and the seller taps Start again.
+async function startAuction(id){
+  if(needSignIn())return;
+  const seller=authName();
+  const r=await j('/api/listings/'+id+'/start',{},sellerHeaders(seller));
+  noteSellerToken(seller,r);
+  if(!r.ok){alert('Error: '+r.error);return;}
+  openItem(id);
+}
 async function payWinner(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/pay',{});alert(r.ok?(`Payment went through — $${r.total} in escrow`+(r.landedItem?` — the Time Wheel landed on: ${r.landedItem}`:'')):'Error: '+r.error);openItem(id);}
 async function markShipped(id){if(needSignIn())return;const seller=authName();const r=await j('/api/listings/'+id+'/mark-shipped',{seller},sellerHeaders(seller));noteSellerToken(seller,r);const m=document.getElementById('shipMsg');if(m)m.textContent=r.ok?('Marked as shipped — tracking '+r.tracking):('Error: '+r.error);if(r.ok)openItem(id);}
 window._rfPhoto='';window._rfVideo='';
