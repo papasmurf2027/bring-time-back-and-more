@@ -86,7 +86,7 @@ async function signUp(){
   // up when you forget your password. A signed-in user can set one
   // later with "Change security question" if they want to reset their
   // own password; without one, a forgotten password is owner-reset only.
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:'both',shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
@@ -101,6 +101,10 @@ async function signIn(){
 }
 async function signOut(){try{await j('/api/auth/logout');}catch(e){}setSession(null);authMsg('Signed out.');const a=document.getElementById('authSec');if(a)a.scrollIntoView({behavior:'smooth',block:'start'});}
 async function saveAddress(){if(needSignIn())return;const r=await j('/api/auth/address',{address:document.getElementById('aAddr').value});if(!r.ok){authMsg('Error: '+r.error);return;}if(currentUser)currentUser.shippingAddress=r.shippingAddress;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}authMsg(r.shippingAddress?('Default shipping address saved — this is your main address now, and it counts for future buys. Items you already won still ship to the address on file when you won them.'):'Default shipping address cleared — add one before you bid or buy.');}
+// Switch a buyer account to buy-and-sell (Kevin, 2026-11-20): one tap on
+// My Profile, no second account, no waitlist. The same button works for
+// anyone who signed up as a buyer and wants to sell.
+async function switchToSeller(){if(needSignIn())return;const r=await j('/api/auth/role',{role:'both'});if(!r.ok){alert('Error: '+(r.error||'could not change your account'));return;}currentUser=r.user;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}renderAuth();loadProfile();alert('You can sell now — your account is Buyer and seller.');}
 async function forgotPw(){
   const email=document.getElementById('aEmail').value||prompt('Email for your account?');
   if(!email){authMsg('Type your email first, then tap Forgot password.');return;}
@@ -189,6 +193,7 @@ async function showReceipt(id){
   box.innerHTML=`
     <p style="font-size:20px;margin:0 0 4px"><b>You're signed in as ${escHtml(u.name)}</b></p>
     <p>${roleName} • ${escHtml(u.email)}</p>
+    ${u.role==='buyer'?`<p><b>You signed up as a buyer, so you can't list yet.</b> <button class="btn" onclick="switchToSeller()">I want to sell too</button></p>`:''}
     <p><b>Real name and shipping address:</b> ${u.shippingAddress?escHtml(u.shippingAddress):'— not set yet. Add it in Your account below.'}</p>
     <h3>What I bought (${act.bought.length})</h3>
     ${act.bought.length?act.bought.map(l=>itemRow(l,'from '+l.seller)).join(''):'<p class="small">Nothing bought yet.</p>'}
