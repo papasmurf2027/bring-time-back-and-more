@@ -86,11 +86,20 @@ async function signUp(){
     const h=document.getElementById('humanCheckRow'); if(h&&h.scrollIntoView)h.scrollIntoView({block:'nearest'});
     return;
   }
+  // Rules agreement at sign-up (Kevin, 2026-11-20): everyone agrees to
+  // the Rules once, when they join — buyers and sellers alike. No more
+  // agreeing every time someone lists.
+  const ag=document.getElementById('aAgree');
+  if(!ag||!ag.checked){
+    authMsg('Read the Rules and agree to them to join — tap "Read the Rules", then "I agree to the Rules".');
+    openRulesModal();
+    return;
+  }
   // No security question at sign-up (Kevin, 2026-11-20): it only comes
   // up when you forget your password. A signed-in user can set one
   // later with "Change security question" if they want to reset their
   // own password; without one, a forgotten password is owner-reset only.
-  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true});
+  const r=await j('/api/auth/signup',{name:document.getElementById('aName').value,email:document.getElementById('aEmail').value,password:document.getElementById('aPass').value,role:document.getElementById('aRole').value,shippingAddress:document.getElementById('aAddr').value,website:document.getElementById('aWebsite')?document.getElementById('aWebsite').value:'',human:true,rulesAgreed:true});
   if(!r.ok){
     authMsg('Error: '+r.error);
     const m=document.getElementById('authMsg'); if(m&&m.scrollIntoView)m.scrollIntoView({block:'nearest'});
@@ -239,6 +248,22 @@ async function load(){
   const saved=new Set(savedShows.map(x=>x.id));
   document.getElementById('shows').innerHTML=s.map(x=>`<p>Coming Up: ${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.starts_at)} ${currentUser?`<button class="btn ghost" onclick="saveShow('${x.id}')">${saved.has(x.id)?'Saved ✓ — tap to unsave':'Save this show'}</button>`:''}</p>`).join('');
   document.getElementById('savedShows').innerHTML=savedShows.length?`<p><b>My saved shows</b></p>`+savedShows.map(x=>`<p>${escHtml(x.title)} by ${escHtml(x.seller)} — ${escHtml(x.starts_at)} <button class="btn ghost" onclick="saveShow('${x.id}')">Unsave</button></p>`).join(''):'';
+  // Saved-show alert (Kevin, 2026-11-20): when a show you saved is
+  // starting now (started within the last 2 hours) or starts in the
+  // next 15 minutes, show a gold banner at the top so you see it right
+  // away. Dismissed shows stay dismissed (kept in localStorage by id).
+  let dismissed=[]; try{dismissed=JSON.parse(localStorage.getItem('btb_show_alert_dismissed')||'[]');}catch(e){}
+  const dis=new Set(dismissed);
+  const nowMs=new Date();
+  const alertShows=savedShows.filter(x=>!dis.has(x.id)).filter(x=>{
+    const st=new Date(x.starts_at); if(isNaN(st))return false;
+    const mins=(st-nowMs)/60000; return mins>=-120&&mins<=15;
+  });
+  document.getElementById('showAlert').innerHTML=alertShows.map(x=>{
+    const st=new Date(x.starts_at); const mins=Math.round((st-nowMs)/60000);
+    const txt=mins<=0?'is starting now!':'starts in '+mins+' minute'+(mins===1?'':'s');
+    return `<div class="card" style="border:2px solid #d4af37;padding:14px;margin:10px 0"><p style="margin:0"><b>🔔 Your saved show "${escHtml(x.title)}" by ${escHtml(x.seller)} ${txt}</b></p><p class="small" style="margin:6px 0">Check Live Now — the seller should be going live.</p><button class="btn" onclick="document.getElementById('liveNow').scrollIntoView({behavior:'smooth',block:'start'})">See live shows</button> <button class="btn ghost" onclick="dismissShowAlert('${x.id}')">Dismiss</button></div>`;
+  }).join('');
   loadKeepTrack();
 }
 function setCat(c){curCat=c;load();}
@@ -444,17 +469,18 @@ function pickPhoto(input){const f=input.files&&input.files[0];if(!f)return;const
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
 function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
 function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
-function agreeRules(){document.getElementById('sAgree').checked=true;var s=document.getElementById('agreeStatus');if(s)s.textContent='✓ You agreed to the Rules.';closeRulesModal();}
+function agreeRules(){var a=document.getElementById('aAgree');if(a)a.checked=true;var sa=document.getElementById('sAgree');if(sa)sa.checked=true;var s=document.getElementById('agreeStatusSignup');if(s)s.textContent='✓ You agreed to the Rules.';var s2=document.getElementById('agreeStatus');if(s2)s2.textContent='✓ You agreed to the Rules.';closeRulesModal();}
 async function createListing(){
   if(needSignIn())return;
-  if(!document.getElementById('sAgree').checked){openRulesModal();return;}
+  // Rules agreement is at sign-up now (Kevin, 2026-11-20) — no more
+  // agreeing every time someone lists.
   const size=document.getElementById('sSize').value;
   const _sw=document.getElementById('sWheel');
   const wheelItems=_sw?(_sw.value||'').split('\n').map(s=>s.trim()).filter(Boolean):[];
   // Fixed price is only for the Store (Kevin, 2026-11-20): an auction never
   // has one, so nobody can buy it outright before the auction is done.
   const _isStore=document.getElementById('sType').value==='buy_now';
-  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:_isStore?document.getElementById('sFixed').value:null,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
+  const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:_isStore?document.getElementById('sFixed').value:null,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
 }
 // Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
@@ -463,9 +489,10 @@ async function createListing(){
 // insured shipping and Seller Agreement as the sell form above.
 async function createRandomItems(){
   if(needSignIn())return;
-  if(!document.getElementById('sAgree').checked){openRulesModal();return;}
+  // Rules agreement is at sign-up now (Kevin, 2026-11-20) — no more
+  // agreeing every time someone lists.
   const size=document.getElementById('sSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,agreement:document.getElementById('sAgree').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
   if(r.ok)load();
@@ -949,6 +976,7 @@ async function loadKeepTrack(){
   box.innerHTML=`<p><b>People you're keeping track of (${mine.length})</b>${mine.length?'<br>'+mine.map(x=>`${escHtml(x.seller)}${x.liveNow?' — <span class="badge">🔴 LIVE NOW</span>':''}${x.nextShow?' — next show '+escHtml(x.nextShow):''} <button class="btn ghost" onclick="unfollowSeller('${escJs(x.seller)}')">Stop</button>`).join('<br>'):' — nobody yet.'}</p><p><b>People keeping track of you (${fr.count})</b>${fr.followers.length?': '+fr.followers.map(escHtml).join(', '):' — nobody yet.'}</p>`;
 }
 async function saveShow(id){if(needSignIn())return;const r=await j('/api/shows/'+id+'/save',{});if(!r.ok){alert('Error: '+r.error);return;}load();}
+function dismissShowAlert(id){let d=[];try{d=JSON.parse(localStorage.getItem('btb_show_alert_dismissed')||'[]');}catch(e){}if(!d.includes(id))d.push(id);try{localStorage.setItem('btb_show_alert_dismissed',JSON.stringify(d));}catch(e){}load();}
 async function makeShow(){
   if(needSignIn())return;
   // Schedule a show (Kevin, 2026-11-20): a missing title or date used to

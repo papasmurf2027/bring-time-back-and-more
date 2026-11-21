@@ -23,6 +23,7 @@
 <header><img src="/logo.jpg" alt="Bring Time Back and More — ornate gold pocket watch melting into an hourglass"><div><h1>Bring Time Back and More</h1><p class="tag">Buy it. Sell it. That's it.</p></div><button class="btn ghost" id="profileBtn" style="display:none;margin-left:auto" onclick="show('profile')">My Profile</button></header>
 <div class="banner">⚠️ PRE-LAUNCH / TEST MODE — No real money moves here yet. No real payments, no buyer is charged, no seller is paid. Bids and sales are practice only. <b>Do not ship a real item in test.</b></div>
 <main>
+<div id="showAlert"></div>
 <section class="hero"><h2>Buy it. Sell it. That's it.</h2><p>Live auctions, the Time Wheel giveaway, and a store — all in one place.</p></section>
 
 <section class="card" id="authSec"><h2>Your account</h2><p id="authStatus">Not signed in — sign up or sign in to bid, buy, list or chat.</p><button class="btn" id="authProfileBtn" style="display:none" onclick="show('profile')">My Profile</button>
@@ -36,6 +37,7 @@
 <label>Your real name and shipping address — your main address <input id="aAddr" placeholder="Real name, street, town/city, state, ZIP"></label><p class="small">Put your real name first, then your address — this is the name and address the seller ships to. It is the one used when you bid or buy. You can change it any time when you are signed in, and the change counts for future buys only. An item you already won always ships to the address that was on file when you won it.</p>
 <button class="btn ghost" onclick="saveAddress()">Save shipping address</button><br>
 <label id="humanCheckRow" style="display:block;margin:8px 0"><input type="checkbox" id="aHuman" style="width:20px;height:20px;vertical-align:middle"> I'm a real person</label>
+<input type="checkbox" id="aAgree" style="display:none"><button class="btn ghost" type="button" onclick="openRulesModal()">Read the Rules</button> <span id="agreeStatusSignup" class="small">Read the Rules and agree to join — buyers and sellers agree once when they join.</span><br>
 <button class="btn" onclick="signUp()">Sign up</button>
 <button class="btn ghost" onclick="signIn()">Sign in</button>
 <button class="btn ghost" onclick="signOut()">Sign out</button>
@@ -75,7 +77,6 @@
 <label>Mode <select id="sMode"><option>Regular</option><option>Sudden Death</option></select></label>
 <p class="small">Regular: an outbid adds 10 seconds. Sudden Death: an outbid does NOT reset the timer.</p>
 <label><input type="checkbox" id="sInsured" style="width:auto"> Insured shipping (required)</label><br>
-<input type="checkbox" id="sAgree" style="display:none"><button class="btn ghost" type="button" onclick="openRulesModal()">Read the Rules</button> <span id="agreeStatus" class="small">You must read the Rules and agree before you can list.</span><br>
 <label><input type="checkbox" id="sNoCom" style="width:auto"> No cancellation / no refund for change of mind — all sales final on that</label><p class="small">Tick this if you want this listing to be no cancellation and no refund for change of mind. The buyer bids knowing that — bidding is their responsibility. A refund is still given for a legit reason only: not as described, damaged, wrong item, defective, or never arrived.</p>
 <button class="btn" onclick="createListing()">List it</button><p id="sellMsg"></p>
 <div style="border:3px solid #c9a227;border-radius:14px;padding:12px;margin-top:14px">
