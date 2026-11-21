@@ -592,8 +592,13 @@ async function createRandomItems(){
   if(needSignIn())return;
   // Rules agreement is at sign-up now (Kevin, 2026-11-20) — no more
   // agreeing every time someone lists.
-  const size=document.getElementById('sSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
+  // Shipping and condition are right here in the Random section now
+  // (Kevin, 2026-11-21) — package size + insured + condition, all in one
+  // spot to start the random. They no longer read the main form's
+  // #sSize/#sInsured/#sCond. Condition defaults to "Say it live in chat"
+  // (the Random way) — the seller can pick a real condition instead.
+  const size=document.getElementById('sRandomSize').value;
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sCat').value,startPrice:document.getElementById('sStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sRandomCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
   if(r.ok)load();
