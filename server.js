@@ -932,6 +932,7 @@ async function expireRefunds() {
 let _lastAutoRelease = 0; // auto escrow release runs once a minute, not every sweep tick
 let _lastPresenceCleanup = 0; // stale room-presence rows are cleared once a minute
 let _lastShowAlert = 0; // saved-show start alerts are checked once a minute
+let _lastLateShip = 0; // late-shipment flags are checked once a minute
 async function sweep() {
   try {
     await expireRefunds();
@@ -991,6 +992,23 @@ async function sweep() {
           if (sv.email) await _sendAccountEmail(sv.email, 'Your saved show is starting — Bring Time Back and More', 'Hi,\n\nYour saved show "' + s.title + '" by ' + s.seller + ' is starting now.\n\nJoin it here: https://bringtimebackandmore.com\n\nBring Time Back and More');
         }
         await query('INSERT INTO show_alerts(show_id,alerted_at) VALUES($1,$2)', [s.id, nowISO()]);
+      }
+    }
+    // Ship-by deadline (Kevin, 2026-11-21): the seller has 5 days from
+    // when the buyer pays to mark the item shipped, or their rating goes
+    // down. Once a minute, flag any paid sale that still has not been
+    // marked shipped 5 days after the buyer paid. Each sale is flagged
+    // once — the late_shipments row makes sure of that — and each late
+    // shipment counts as a 1-star entry on the Seller Scorecard.
+    if (Date.now() - _lastLateShip > 60000) {
+      _lastLateShip = Date.now();
+      const _fiveDaysAgo = new Date(Date.now() - 5 * 24 * 3600 * 1000).toISOString();
+      const _late = await query("SELECT l.* FROM listings l JOIN receipts r ON r.listing_id=l.id WHERE l.status='sold' AND l.payment_status='validated' AND (l.shipped_at IS NULL OR l.shipped_at='') AND r.created_at <= $1", [_fiveDaysAgo]);
+      for (const _l of _late) {
+        const _already = await queryOne('SELECT * FROM late_shipments WHERE listing_id=$1', [_l.id]);
+        if (_already) continue;
+        const _rc = await queryOne('SELECT created_at FROM receipts WHERE listing_id=$1', [_l.id]);
+        await query('INSERT INTO late_shipments(id,listing_id,seller,paid_at,created_at) VALUES($1,$2,$3,$4,$5)', [uid(), _l.id, _l.seller, _rc ? _rc.created_at : '', nowISO()]);
       }
     }
   } catch (e) { console.error('sweep', e.message); }
@@ -1601,9 +1619,19 @@ async function sellerStatus(seller) {
 }
 async function sellerTier(seller) {
   const clean = await cleanSalesCount(seller);
-  const sc = await queryOne('SELECT AVG(stars) AS avg, COUNT(*) AS n FROM reviews WHERE seller=$1', [seller]);
-  const score = sc && sc.avg !== null && sc.avg !== undefined ? Number(sc.avg) : null;
-  const scoreCount = sc ? Number(sc.n || 0) : 0;
+  const sc = await queryOne('SELECT SUM(stars) AS sum, COUNT(*) AS n FROM reviews WHERE seller=$1', [seller]);
+  // Ship-by deadline (Kevin, 2026-11-21): each late shipment — a paid
+  // sale not marked shipped within 5 days — counts as a 1-star entry on
+  // the Seller Scorecard, pulling the average down one late shipment at
+  // a time. The score is the average over winner reviews PLUS late
+  // shipments counted as 1 star each.
+  const late = await queryOne('SELECT COUNT(*) AS n FROM late_shipments WHERE seller=$1', [seller]);
+  const lateCount = late ? Number(late.n || 0) : 0;
+  const reviewCount = sc ? Number(sc.n || 0) : 0;
+  const reviewSum = sc && sc.sum !== null && sc.sum !== undefined ? Number(sc.sum) : 0;
+  const totalCount = reviewCount + lateCount;
+  const score = totalCount > 0 ? (reviewSum + lateCount * 1) / totalCount : null;
+  const scoreCount = totalCount;
   let tier = 'New';
   if (clean >= 10 && (score === null || score >= 4.0)) tier = 'Top';
   else if (clean >= 3) tier = 'Trusted';
@@ -1617,7 +1645,7 @@ async function sellerTier(seller) {
   const nextTier = tier === 'New' ? 'Trusted' : tier === 'Trusted' ? 'Top' : null;
   const salesToNext = tier === 'New' ? Math.max(0, 3 - clean) : tier === 'Trusted' ? Math.max(0, 10 - clean) : 0;
   const status = await sellerStatus(seller);
-  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, nextTier, salesToNext, incorrectClaims, badListingStrikes: status.badListingStrikes, strikes: status.strikes, suspendedUntil: status.suspendedUntil, suspensionDays: status.suspensionDays, banned: status.banned, canSell: status.canSell };
+  return { tier, cleanSales: clean, score: score === null ? null : Math.round(score * 10) / 10, scoreCount, lateShipments: lateCount, nextTier, salesToNext, incorrectClaims, badListingStrikes: status.badListingStrikes, strikes: status.strikes, suspendedUntil: status.suspendedUntil, suspensionDays: status.suspensionDays, banned: status.banned, canSell: status.canSell };
 }
 function payoutHoursFor(tier, amount) {
   if (tier === 'Top') return 12;
@@ -1917,9 +1945,17 @@ app.post('/api/reviews', async (req, res) => {
   res.json({ ok: true });
 });
 app.get('/api/scorecard/:seller', async (req, res) => {
-  const r = await queryOne('SELECT AVG(stars) AS avg, COUNT(*) AS n FROM reviews WHERE seller=$1', [req.params.seller]);
+  const r = await queryOne('SELECT SUM(stars) AS sum, COUNT(*) AS n FROM reviews WHERE seller=$1', [req.params.seller]);
+  // Ship-by deadline (Kevin, 2026-11-21): each late shipment counts as a
+  // 1-star entry on the Seller Scorecard, same as in sellerTier.
+  const late = await queryOne('SELECT COUNT(*) AS n FROM late_shipments WHERE seller=$1', [req.params.seller]);
+  const lateCount = late ? Number(late.n || 0) : 0;
+  const reviewCount = r ? Number(r.n || 0) : 0;
+  const reviewSum = r && r.sum !== null && r.sum !== undefined ? Number(r.sum) : 0;
+  const totalCount = reviewCount + lateCount;
+  const avg = totalCount > 0 ? (reviewSum + lateCount * 1) / totalCount : null;
   const rows = await query('SELECT * FROM reviews WHERE seller=$1 ORDER BY created_at DESC', [req.params.seller]);
-  res.json({ seller: req.params.seller, average: r && r.avg ? Number(r.avg).toFixed(1) : null, count: Number((r && r.n) || 0), reviews: rows });
+  res.json({ seller: req.params.seller, average: avg === null ? null : avg.toFixed(1), count: totalCount, reviews: rows, lateShipments: lateCount });
 });
 app.post('/api/shows', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;

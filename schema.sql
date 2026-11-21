@@ -37,6 +37,11 @@ CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, listing_id TEXT NOT NUL
 CREATE TABLE IF NOT EXISTS shows (id TEXT PRIMARY KEY, seller TEXT NOT NULL, title TEXT NOT NULL, starts_at TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS saved_shows (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, show_id TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS show_alerts (show_id TEXT PRIMARY KEY, alerted_at TEXT NOT NULL);
+-- Late shipments (Kevin, 2026-11-21): a paid sale not marked shipped
+-- within 5 days of the buyer paying. One row per sale, so each sale is
+-- flagged once, and each row counts as a 1-star entry on the Seller
+-- Scorecard. paid_at is when the buyer paid (the receipt date).
+CREATE TABLE IF NOT EXISTS late_shipments (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL UNIQUE, seller TEXT NOT NULL, paid_at TEXT, created_at TEXT NOT NULL);
 -- welcome_email_status: 'sent' (welcome email sent via Resend), 'pending' (no
 -- Resend key set yet so the joiner is stored and still to be welcomed, and the
 -- launch email still covers them), or 'failed' (Resend was tried and refused it).
