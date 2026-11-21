@@ -504,7 +504,10 @@ app.post('/api/auth/signup', async (req, res) => {
   const _domain = (email.split('@')[1] || '').toLowerCase();
   if (DISPOSABLE_EMAIL_DOMAINS.includes(_domain)) return res.json({ ok: false, error: 'use a real email address — temporary email addresses cannot sign up' });
   const password = String(b.password || '');
-  const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'buyer';
+  // Everyone can buy and sell (Kevin, 2026-11-20): no role choice at
+  // sign-up, so nobody can pick the wrong one and get stuck as a buyer.
+  // New accounts are always buy-and-sell.
+  const role = ['buyer', 'seller', 'both'].includes(b.role) ? b.role : 'both';
   const shippingAddress = String(b.shippingAddress || b.address || '').trim().slice(0, 500);
   // Security question (Kevin, 2026-11-20): NOT asked at sign-up any more —
   // it only comes up when you forget your password. A user can set one
@@ -561,6 +564,17 @@ app.post('/api/auth/address', async (req, res) => {
   await query('UPDATE users SET shipping_address=$1 WHERE id=$2', [address, u.id]);
   const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
   res.json({ ok: true, shippingAddress: fresh.shipping_address || '', user: _publicUser(fresh) });
+});
+// Switch roles after sign-up (Kevin, 2026-11-20): a buyer who wants to sell
+// taps one button instead of making a second account. Any signed-in user
+// can switch between buyer, seller, and buy-and-sell.
+app.post('/api/auth/role', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const role = String((req.body && req.body.role) || '').trim();
+  if (!['buyer', 'seller', 'both'].includes(role)) return res.json({ ok: false, error: 'pick a role — buyer, seller, or buy and sell' });
+  await query('UPDATE users SET role=$1 WHERE id=$2', [role, u.id]);
+  const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
+  res.json({ ok: true, user: _publicUser(fresh) });
 });
 app.post('/api/auth/logout', async (req, res) => {
   const token = (req.headers && req.headers['x-session-token']) || (req.body && req.body.sessionToken) || '';
@@ -979,7 +993,7 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
 }
 app.post('/api/listings', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
-  if (u.role === 'buyer') return res.json({ ok: false, error: 'sign up as a seller to list — your account is a buyer account' });
+  if (u.role === 'buyer') return res.json({ ok: false, error: 'your account is a buyer account — go to My Profile and tap "I want to sell too", then you can list' });
   const b = req.body || {};
   // The seller is the signed-in account — a seller name typed in the form is ignored.
   b.seller = u.name; b.sellerUserId = u.id;
