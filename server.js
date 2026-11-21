@@ -733,6 +733,9 @@ async function spinWheelFor(l) {
   const exLabel = await queryOne('SELECT * FROM labels WHERE listing_id=$1', [l.id]);
   if (!exLabel) await query('INSERT INTO labels(id,listing_id,carrier,tracking,code,created_at) VALUES($1,$2,$3,$4,$5,$6)',
     [uid(), l.id, carrier, tracking, 'LBL-' + uid().slice(0, 8).toUpperCase(), nowISO()]);
+  // Email the winner what they won + the shipping (Kevin, 2026-11-20).
+  // Free win — winner pays nothing, seller covers shipping. Never blocks.
+  await sendWinnerEmail(l, landed.name, landed.user_id || null, 0, receiptNo, carrier, tracking, winnerAddress);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `⏰ Time Wheel landed on: ${landed.name} — they win ${l.title} FREE. No payment, no extra charge — the seller covers the shipping.`, nowISO()]);
   return { landedName: landed.name, landedIndex: idx, totalEntries: entries.length, winnerAddress, tracking, carrier };
@@ -1141,6 +1144,25 @@ app.post('/api/listings/:id/bid', async (req, res) => {
   res.json({ ok: true, currentBid: updated.current_bid, endsAt: updated.ends_at, addedSeconds, total: updated.current_bid + updated.shipping });
 });
 // ---------- Store Buy Now / winner payment (SIMULATED test check) ----------
+// Winner email (Kevin, 2026-11-20): when someone wins an auction or
+// buys from the Store, email them what they won and the shipping. It
+// goes to the buyer's account email. It never blocks the sale — if the
+// email cannot send, the sale still completes and the receipt stays on
+// their profile. With no Resend key set it does not send (manual mode),
+// the same as every other email on the site.
+async function sendWinnerEmail(l, buyer, winnerUserId, total, receiptNo, carrier, tracking, winnerAddress) {
+  try {
+    let email = null;
+    if (winnerUserId) { const u = await queryOne('SELECT email FROM users WHERE id=$1', [winnerUserId]); if (u) email = u.email; }
+    if (!email) { const u = await queryOne('SELECT email FROM users WHERE name=$1', [buyer]); if (u) email = u.email; }
+    if (!email) return;
+    const item = l.revealed_item || l.wheel_landed_item || l.title;
+    const price = l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0);
+    const isFree = l.type === 'wheel' && Number(total) === 0;
+    const text = 'Hi ' + buyer + ',\n\n' + (isFree ? 'You won a FREE giveaway on Bring Time Back and More — you pay nothing, the seller covers the shipping!\n\nWhat you won: ' + item + '\nSeller: ' + l.seller + '\nShipping: covered by the seller (' + carrier + ', tracking ' + tracking + ')\nTotal paid: $0.00\nReceipt: ' + receiptNo + '\n\nShip to (locked for this win): ' + (winnerAddress || '—') : 'You won on Bring Time Back and More!\n\nWhat you won: ' + item + '\nSeller: ' + l.seller + '\nPrice: $' + Number(price).toFixed(2) + '\nShipping: $' + Number(l.shipping || 0).toFixed(2) + ' (' + carrier + ', tracking ' + tracking + ')\nTotal paid: $' + Number(total).toFixed(2) + '\nReceipt: ' + receiptNo + '\n\nShip to (locked for this sale): ' + (winnerAddress || '—')) + '\n\nThe seller will mark it shipped once it goes out — you can follow it on your profile (My Profile > What I bought) and on the item page. Your receipt and video receipt are there too.\n\nBring Time Back and More';
+    await _sendAccountEmail(email, 'You won: ' + item + ' — Bring Time Back and More', text);
+  } catch (e) { /* winner email never blocks the sale */ }
+}
 async function completeSale(l, buyer, method, detail, winnerAddress, winnerUserId) {
   const check = validatePayment(method, detail);
   if (!check.ok) {
@@ -1171,6 +1193,10 @@ async function completeSale(l, buyer, method, detail, winnerAddress, winnerUserI
   const exRcpt = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [l.id]);
   if (!exRcpt) await query('INSERT INTO receipts(id,listing_id,receipt_no,amount,shipping,total,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',
     [uid(), l.id, receiptNo, l.type === 'buy_now' ? (l.fixed_price || 0) : (l.current_bid || 0), l.shipping || 0, total, nowISO()]);
+  // Email the winner what they won + the shipping (Kevin, 2026-11-20).
+  // It never blocks the sale — if email is not set up yet, the receipt
+  // on their profile is still there.
+  await sendWinnerEmail(l, buyer, winnerUserId, total, receiptNo, carrier, tracking, winnerAddress);
   return { ok: true, total, receiptNo };
 }
 // Enter the Time Wheel giveaway — FREE. One entry per person, by account.
@@ -1437,6 +1463,57 @@ app.post('/api/listings/:id/chat', async (req, res) => {
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,$5,$6)',
     [uid(), l.id, u.name, req.body.message || '', u.name === l.seller ? 1 : 0, nowISO()]);
   res.json({ ok: true });
+});
+// Private messages (Kevin, 2026-11-20): a buyer can message a seller
+// about a listing, and only those two ever see it — never the public
+// chat, never anyone else. A buyer messages the seller; the seller
+// replies to that buyer (send `to` with the buyer's name). Advertising
+// other sites is blocked here just like in the public chat.
+app.post('/api/listings/:id/message', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  const msg = String(req.body.message || '').trim().slice(0, 1000);
+  if (!msg) return res.json({ ok: false, error: 'type a message first' });
+  if (adHit(msg)) return res.json({ ok: false, error: AD_ERROR });
+  const isSeller = u.name === l.seller;
+  let to;
+  if (isSeller) {
+    to = String(req.body.to || '').trim();
+    if (!to) return res.json({ ok: false, error: 'pick who to reply to' });
+    if (to === u.name) return res.json({ ok: false, error: 'you cannot message yourself' });
+  } else {
+    to = l.seller;
+  }
+  await query('INSERT INTO private_messages(id,listing_id,sender,recipient,message,created_at) VALUES($1,$2,$3,$4,$5,$6)',
+    [uid(), l.id, u.name, to, msg, nowISO()]);
+  res.json({ ok: true });
+});
+app.get('/api/listings/:id/messages', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (u.name === l.seller) return res.json(await query('SELECT * FROM private_messages WHERE listing_id=$1 ORDER BY created_at ASC', [l.id]));
+  // NOTE: pass u.name twice as $2 and $3 — do NOT reuse $2. The SQLite
+  // fallback replaces every $N with ?, so a reused $2 would leave the
+  // second ? unbound and the recipient half would never match.
+  return res.json(await query('SELECT * FROM private_messages WHERE listing_id=$1 AND (sender=$2 OR recipient=$3) ORDER BY created_at ASC', [l.id, u.name, u.name]));
+});
+// My private message threads (for My Profile): one row per listing the
+// user has messages on, with the other person and the latest message.
+app.get('/api/my-messages', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  // NOTE: pass u.name twice as $1 and $2 — do NOT reuse $1 (see the
+  // same note on GET /api/listings/:id/messages).
+  const rows = await query('SELECT pm.listing_id, l.title, l.seller, pm.sender, pm.recipient, pm.message, pm.created_at FROM private_messages pm JOIN listings l ON l.id=pm.listing_id WHERE pm.sender=$1 OR pm.recipient=$2 ORDER BY pm.created_at DESC', [u.name, u.name]);
+  const threads = {};
+  for (const r of rows) {
+    const other = r.sender === u.name ? r.recipient : r.sender;
+    const k = r.listing_id + '|' + other;
+    if (!threads[k]) threads[k] = { listingId: r.listing_id, title: r.title, seller: r.seller, other, lastMessage: r.message, lastAt: r.created_at, count: 0 };
+    threads[k].count++;
+  }
+  res.json({ ok: true, threads: Object.values(threads) });
 });
 app.post('/api/listings/:id/go-live', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);

@@ -169,6 +169,13 @@ CREATE TABLE IF NOT EXISTS role_switches (
   code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, used INTEGER DEFAULT 0,
   created_at TEXT NOT NULL
 );
+-- Private messages (Kevin, 2026-11-20): a buyer can message a seller
+-- about a listing, and only those two see it — never anyone else, never
+-- the public chat. One thread per listing per buyer.
+CREATE TABLE IF NOT EXISTS private_messages (
+  id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, sender TEXT NOT NULL,
+  recipient TEXT NOT NULL, message TEXT NOT NULL, created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS seller_tokens (
   id TEXT PRIMARY KEY, seller TEXT NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL
 );
