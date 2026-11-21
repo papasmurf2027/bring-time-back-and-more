@@ -1006,7 +1006,7 @@ async function hideSuspended(rows) {
   const cache = {};
   const out = [];
   for (const l of rows) {
-    if (l.status !== 'live') { out.push(l); continue; }
+    if (l.status !== 'live' && l.status !== 'queued') { out.push(l); continue; }
     if (!(l.seller in cache)) cache[l.seller] = await sellerStatus(l.seller);
     if (cache[l.seller].canSell) out.push(l);
   }
@@ -1129,7 +1129,7 @@ app.get('/api/listings/:id/qr', async (req, res) => {
 // page — that revealed item is saved on the listing and shown on the winner
 // receipt, the video receipt record and the ship-QR section.
 async function insertListing(b, title, description, type, wheelItems, shipAmt, sizePrice, auth, timer, isRandom, cond) {
-  const created = new Date(); const ends = new Date(created.getTime() + timer * 1000);
+  const created = new Date();
   const id = uid();
   // Listing photo (2026-11-19 fix): only an uploaded data:image or a plain
   // https link is stored. A bad photo link is refused, never rendered raw.
@@ -1141,9 +1141,16 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   // per listing and shown before anyone bids. Legit reasons still get a
   // refund — this flag never blocks those.
   const noCom = (b.noChangeOfMind || b.no_change_of_mind) ? 1 : 0;
+  // Start-auction flow (Kevin, 2026-11-20): an auction or wheel listing is
+  // created QUEUED — its timer does NOT start on listing. The seller taps
+  // "Start auction" in the room to start one item's timer; when it ends
+  // they start the next one. Only the started item has a running timer, so
+  // there is one timer per item, not several running at once. A Store
+  // (buy_now) item has no timer and is live to buy right away.
+  const startStatus = type === 'buy_now' ? 'live' : 'queued';
   await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random,seller_user_id,no_change_of_mind)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'live',$17,$18,$19,$20,$21,$22,$23)`,
-    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), (type === 'buy_now' && b.fixedPrice) ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24)`,
+    [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), (type === 'buy_now' && b.fixedPrice) ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', startStatus, created.toISOString(), null, imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
   return id;
 }
 app.post('/api/listings', async (req, res) => {
@@ -1178,9 +1185,16 @@ app.post('/api/listings', async (req, res) => {
   const auth = b.authenticity || 'Authentic';
   // Condition (Kevin, 2026-11-18): required on every listing — auctions,
   // Store and Random Items. No valid condition = no listing.
+  // Random Items (Kevin, 2026-11-20): the seller does not know what each
+  // random item is until they hold it up live, so they may pick "Say it live
+  // in chat" instead of a condition — they say the condition in the chat
+  // when they show the item live, and the chat is saved in the video
+  // receipt. That option is only for Random Items, never for a regular
+  // auction or a Store item.
   const CONDITIONS = ['New', 'Used – Working', 'Used – Working Project', 'Used – Not Working / Project / For Parts'];
   const cond = b.condition;
-  if (!CONDITIONS.includes(cond)) return res.json({ ok: false, error: 'pick a condition — New, Used – Working, Used – Working Project, or Used – Not Working / Project / For Parts' });
+  const condOk = CONDITIONS.includes(cond) || (isRandom && cond === 'Say it live in chat');
+  if (!condOk) return res.json({ ok: false, error: 'pick a condition — New, Used – Working, Used – Working Project, or Used – Not Working / Project / For Parts' + (isRandom ? ' — or "Say it live in chat" for Random Items' : '') });
   const timer = Math.min(3600, Math.max(5, parseInt(b.timerSeconds || 30, 10) || 30));
   if (isRandom) {
     // One tap creates N separate auctions: "Random Item 1", "Random Item 2", …
@@ -1244,6 +1258,7 @@ app.post('/api/listings/:id/bid', async (req, res) => {
   // Sellers cannot bid on their own auctions (2026-11-19 fix): no shill bidding.
   if (_sellerMatches(req, l)) return res.json({ ok: false, error: 'you cannot bid on your own listing' });
   if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'this is a Store listing — Buy Now only, no bidding' });
+  if (l.status === 'queued') return res.json({ ok: false, error: 'this auction has not started yet — the seller taps Start auction when they are ready' });
   if (l.status !== 'live') return res.json({ ok: false, error: 'auction is not live' });
   if (l.ends_at && new Date(l.ends_at) <= new Date()) { await sweep(); return res.json({ ok: false, error: 'auction has ended' }); }
   const amount = Number(req.body.amount);
@@ -1400,6 +1415,36 @@ app.post('/api/listings/:id/notify-fix', async (req, res) => {
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
     [uid(), l.id, l.seller, `Payment fix needed: $${(l.current_bid || 0) + (l.shipping || 0)} is owed for "${l.title}". Please fix your payment and try again.`, nowISO()]);
   res.json({ ok: true });
+});
+// ---------- Start auction (Kevin, 2026-11-20) ----------
+// The seller taps "Start auction" in the room to start one queued item's
+// timer. When it ends they start the next one — the room moves to the next
+// item on its own, no scrolling. Only one item runs at a time per seller,
+// so there is one timer per item. The show itself only ends when the seller
+// taps End Live, never when an item ends.
+app.post('/api/listings/:id/start', async (req, res) => {
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  if (!await requireSellerFor(req, res, l)) return;
+  const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
+  if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'Store items have no timer — they are live to buy right away' });
+  if (l.status === 'live') return res.json({ ok: false, error: 'this auction is already running' });
+  if (l.status !== 'queued') return res.json({ ok: false, error: 'this auction already ended — use Rerun to run it again' });
+  const running = await queryOne("SELECT id FROM listings WHERE seller=$1 AND status='live' AND type IN ('auction','wheel') AND id<>$2 LIMIT 1", [l.seller, l.id]);
+  if (running) return res.json({ ok: false, error: 'finish the current item first — only one auction runs at a time' });
+  const created = new Date(); const ends = new Date(created.getTime() + (l.timer_seconds || 30) * 1000);
+  await query('UPDATE listings SET status=$1, created_at=$2, ends_at=$3 WHERE id=$4', ['live', created.toISOString(), ends.toISOString(), l.id]);
+  res.json({ ok: true, endsAt: ends.toISOString(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
+});
+// Next queued item for the auto-advance (Kevin, 2026-11-20): when the
+// current item ends, the room moves to the seller's next queued item on its
+// own — no scrolling. Returns the seller's oldest queued auction/wheel, or
+// null when there is no next item.
+app.get('/api/listings/:id/next', async (req, res) => {
+  const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
+  if (!l) return res.json({ ok: false, error: 'not found' });
+  const n = await queryOne("SELECT * FROM listings WHERE seller=$1 AND status='queued' AND type IN ('auction','wheel') AND id<>$2 ORDER BY created_at ASC LIMIT 1", [l.seller, l.id]);
+  res.json({ ok: true, next: n ? _stripWinnerAddress(n, req, null) : null });
 });
 app.post('/api/listings/:id/rerun', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
