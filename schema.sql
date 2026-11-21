@@ -36,6 +36,7 @@ CREATE TABLE IF NOT EXISTS top_limits (id TEXT PRIMARY KEY, listing_id TEXT NOT 
 CREATE TABLE IF NOT EXISTS reviews (id TEXT PRIMARY KEY, listing_id TEXT NOT NULL, seller TEXT NOT NULL, reviewer TEXT NOT NULL, stars INTEGER NOT NULL, comment TEXT DEFAULT '', created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS shows (id TEXT PRIMARY KEY, seller TEXT NOT NULL, title TEXT NOT NULL, starts_at TEXT NOT NULL, created_at TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS saved_shows (id TEXT PRIMARY KEY, user_id TEXT NOT NULL, show_id TEXT NOT NULL, created_at TEXT NOT NULL);
+CREATE TABLE IF NOT EXISTS show_alerts (show_id TEXT PRIMARY KEY, alerted_at TEXT NOT NULL);
 -- welcome_email_status: 'sent' (welcome email sent via Resend), 'pending' (no
 -- Resend key set yet so the joiner is stored and still to be welcomed, and the
 -- launch email still covers them), or 'failed' (Resend was tried and refused it).
@@ -152,7 +153,8 @@ CREATE TABLE IF NOT EXISTS users (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, email TEXT NOT NULL UNIQUE,
   password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT DEFAULT 'buyer',
   email_verified INTEGER DEFAULT 0, shipping_address TEXT DEFAULT '', created_at TEXT NOT NULL,
-  security_question TEXT DEFAULT '', security_answer_hash TEXT DEFAULT '', security_answer_salt TEXT DEFAULT ''
+  security_question TEXT DEFAULT '', security_answer_hash TEXT DEFAULT '', security_answer_salt TEXT DEFAULT '',
+  rules_agreed INTEGER DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,

@@ -302,6 +302,7 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN return_received_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN return_delivered_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE users ADD COLUMN rules_agreed INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_photo_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_video_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_at TEXT'); } catch (e) { /* column already exists */ }
@@ -509,6 +510,13 @@ app.post('/api/auth/signup', async (req, res) => {
   // directly. It is only for sign-up — sign-in and signed-in users
   // never see it.
   if (b.human !== true && b.human !== 'true') return res.json({ ok: false, error: 'tap the box to show you are a real person, then try again' });
+  // Rules agreement at sign-up (Kevin, 2026-11-20): everyone agrees to
+  // the Rules once, when they join — buyers and sellers alike. It is no
+  // longer asked every time someone lists, because that was a pain.
+  // Existing accounts are grandfathered — they already joined under the
+  // Rules, and the per-listing agreement is gone, so they are never
+  // asked again.
+  if (b.rulesAgreed !== true && b.rulesAgreed !== 'true' && b.rulesAgreed !== 1) return res.json({ ok: false, error: 'read the Rules and agree to them to join — tap "Read the Rules" then "I agree to the Rules"' });
   const _domain = (email.split('@')[1] || '').toLowerCase();
   if (DISPOSABLE_EMAIL_DOMAINS.includes(_domain)) return res.json({ ok: false, error: 'use a real email address — temporary email addresses cannot sign up' });
   const password = String(b.password || '');
@@ -539,7 +547,7 @@ app.post('/api/auth/signup', async (req, res) => {
   const salt = crypto.randomBytes(16).toString('hex');
   const secSalt = crypto.randomBytes(16).toString('hex');
   const id = uid();
-  await query('INSERT INTO users(id,name,email,password_hash,salt,role,email_verified,shipping_address,created_at,security_question,security_answer_hash,security_answer_salt) VALUES($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11)',
+  await query('INSERT INTO users(id,name,email,password_hash,salt,role,email_verified,shipping_address,created_at,security_question,security_answer_hash,security_answer_salt,rules_agreed) VALUES($1,$2,$3,$4,$5,$6,0,$7,$8,$9,$10,$11,1)',
     [id, name, email, _hashPassword(password, salt), salt, role, shippingAddress, nowISO(), secQ, _hashAnswer(secA, secSalt), secSalt]);
   const user = await queryOne('SELECT * FROM users WHERE id=$1', [id]);
   const token = await _createSession(id);
@@ -846,6 +854,7 @@ async function expireRefunds() {
 // Auto-end timers + draw free drops, every second.
 let _lastAutoRelease = 0; // auto escrow release runs once a minute, not every sweep tick
 let _lastPresenceCleanup = 0; // stale room-presence rows are cleared once a minute
+let _lastShowAlert = 0; // saved-show start alerts are checked once a minute
 async function sweep() {
   try {
     await expireRefunds();
@@ -886,6 +895,26 @@ async function sweep() {
     if (Date.now() - _lastPresenceCleanup > 60000) {
       _lastPresenceCleanup = Date.now();
       await runQuery('DELETE FROM room_presence WHERE last_seen < $1', [new Date(Date.now() - 5 * 60000).toISOString()]);
+    }
+    // Saved-show alert (Kevin, 2026-11-20): when a show someone saved
+    // starts, email everyone who saved it. Once a minute, look for shows
+    // whose start time just passed (within the last 10 minutes) that
+    // have not been alerted yet. show_alerts makes sure each show is
+    // emailed once. The email only sends once a Resend key is set — until
+    // then it is manual mode, like the winner email.
+    if (Date.now() - _lastShowAlert > 60000) {
+      _lastShowAlert = Date.now();
+      const now = new Date();
+      const due = await query("SELECT * FROM shows WHERE starts_at <= $1 AND starts_at >= $2", [now.toISOString(), new Date(now.getTime() - 10 * 60000).toISOString()]);
+      for (const s of due) {
+        const already = await queryOne('SELECT * FROM show_alerts WHERE show_id=$1', [s.id]);
+        if (already) continue;
+        const savers = await query('SELECT u.email FROM saved_shows ss JOIN users u ON u.id=ss.user_id WHERE ss.show_id=$1', [s.id]);
+        for (const sv of savers) {
+          if (sv.email) await _sendAccountEmail(sv.email, 'Your saved show is starting — Bring Time Back and More', 'Hi,\n\nYour saved show "' + s.title + '" by ' + s.seller + ' is starting now.\n\nJoin it here: https://bringtimebackandmore.com\n\nBring Time Back and More');
+        }
+        await query('INSERT INTO show_alerts(show_id,alerted_at) VALUES($1,$2)', [s.id, nowISO()]);
+      }
     }
   } catch (e) { console.error('sweep', e.message); }
 }
@@ -1044,7 +1073,8 @@ app.post('/api/listings', async (req, res) => {
   if (st.banned) return res.json({ ok: false, error: 'this seller cannot sell on the site again — selling privileges were removed after a third incorrect return claim' });
   if (!st.canSell) return res.json({ ok: false, error: 'selling is suspended for this seller until ' + st.suspendedUntil + ' — selling privileges suspended after an incorrect return claim that was not upheld after review' });
   if (!isRandom && !b.title) return res.json({ ok: false, error: 'seller and title are required' });
-  if (!b.agreement) return res.json({ ok: false, error: 'Seller Agreement must be accepted' });
+  // Rules agreement is at sign-up now (Kevin, 2026-11-20), not every
+  // time someone lists — the old per-listing check is gone.
   // No advertising another auction site / marketplace in a listing.
   if (adHit((b.title || '') + ' ' + (b.description || '') + ' ' + (b.randomBase || ''))) return res.json({ ok: false, error: AD_ERROR });
   // Shipping is set by package size; a plain $ amount is still accepted for
