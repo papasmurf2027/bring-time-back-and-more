@@ -9,6 +9,14 @@ const crypto = require('crypto');
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
+// Always fetch the page and the script fresh (Kevin, 2026-11-20): his
+// phone kept showing a saved old copy of the site after a deploy, so a
+// new fix did not show up and the same old error kept coming back.
+// No-cache on the page and the script forces a fresh copy every time.
+app.use((req, res, next) => {
+  if (req.path === '/' || req.path.endsWith('.html') || req.path.endsWith('.js')) res.set('Cache-Control', 'no-store, no-cache, must-revalidate');
+  next();
+});
 app.use(express.static(path.join(__dirname, 'public')));
 // ---------- Rate limiting (in-memory, no new dependencies) ----------
 // 60 POST /api/* per minute per IP; stricter for chat/bid (20/min) and
