@@ -134,7 +134,7 @@ async function forgotPw(){
   if(!r2.ok){authMsg('Error: '+r2.error);return;}
   authMsg(r2.message||'Answer is right.');
   const resetCode=prompt('Reset code (from your email, or from the owner if no email key is set)?');
-  if(!token)return;
+  if(!resetCode)return;
   const np=prompt('New password (at least 8 characters)?');
   if(!np)return;
   const r3=await j('/api/auth/reset',{token:resetCode,newPassword:np});
@@ -190,7 +190,7 @@ async function loadProfile(){
   const box=document.getElementById('profileBody'); if(!box)return;
   if(!currentUser){box.innerHTML='<p><b>You are not signed in.</b></p><p>Sign up or sign in in Your account below to see your profile.</p>';return;}
   const u=currentUser;
-  let act={bought:[],sold:[]};
+  let act={bought:[],sold:[],wonUnpaid:[]};
   try{const r=await j('/api/my-activity'); if(r&&r.ok)act=r;}catch(e){}
   // Private message threads (Kevin, 2026-11-20): only the buyer and the
   // seller see each thread — nobody else.
@@ -232,6 +232,7 @@ async function showReceipt(id, boxId){
   box.innerHTML=`
     <p style="font-size:20px;margin:0 0 4px">${sellerPhotoImg(u.photo,72)}<b>You're signed in as ${escHtml(u.name)}</b></p>
     <p>${roleName} • ${escHtml(u.email)}</p>
+    ${(act.wonUnpaid&&act.wonUnpaid.length)?`<div style="background:linear-gradient(135deg,#c9a227,#f5d76e);color:#081426;border-radius:12px;padding:14px;margin:10px 0"><h3 style="margin-top:0">🏆 You won!</h3>${act.wonUnpaid.map(l=>`<p><b>${escHtml(l.title)}</b> — you won it for $${l.price}${l.shipping?` + $${l.shipping} shipping`:''} • from ${escHtml(l.seller)}<br><button class="btn" onclick="payWinner('${l.id}')">Pay now</button> <button class="btn ghost" onclick="openItem('${l.id}')">Open item</button></p>`).join('')}<p class="small">Pay now so the seller can ship it — the money goes into escrow hold until it arrives.</p></div>`:''}
     <h3>Your name and picture</h3>
     <p class="small">Your username is what people see next to your listings, bids and messages. Your picture shows next to your name. Changing your username changes it everywhere — your old listings, bids and messages show the new name too.</p>
     <label>Username <input id="newName" value="${escHtml(u.name)}" maxlength="100"></label>
@@ -402,6 +403,33 @@ function updateHourglasses(){
 // it. Only once per item, so it never loops.
 let lastAutoAdvanceId=null;
 let lastOpenedItemId=null; // openItem scrolls to the room only when a NEW item is opened, not on re-renders (bid, chat, etc.)
+// Winner banner + winner line (Kevin, 2026-11-21): when an auction ends,
+// show who won on the live screen for a few seconds, then it goes away
+// and the next item comes up. The winner's name also stays near the bid
+// button until the next auction starts (lastWinner) — see openItem.
+let lastWinner=null;
+async function showWinnerBanner(id){
+  let l=null;
+  for(let i=0;i<4;i++){
+    try{const r=await j('/api/listings/'+id); if(r&&r.id){l=r; if(l.winner||l.status==='ended')break;}}catch(e){}
+    if(i<3)await new Promise(res=>setTimeout(res,1000));
+  }
+  const box=document.getElementById('liveRoomBox');
+  if(box&&l){
+    const name=l.winner?escHtml(l.winner):null;
+    const amt=(l.type==='auction'&&l.current_bid!=null)?Number(l.current_bid):null;
+    lastWinner={name:l.winner||'',amount:amt,title:l.title||'',type:l.type||'auction',seller:l.seller||''};
+    const div=document.createElement('div');
+    div.id='winnerBanner';
+    div.style.cssText='background:linear-gradient(135deg,#c9a227,#f5d76e);color:#081426;border-radius:12px;padding:16px;margin-top:10px;text-align:center;font-size:20px;font-weight:800';
+    div.innerHTML=name?`🏆 ${name} won ${escHtml(l.title||'this item')}${amt!=null&&amt>0?` for $${amt}`:''}!`:`Auction ended — no bids, no winner.`;
+    box.prepend(div);
+    await new Promise(res=>setTimeout(res,5000));
+    if(div.parentNode)div.parentNode.removeChild(div);
+  }
+  try{const r=await j('/api/listings/'+id+'/next'); if(r.ok&&r.next)return r.next.id;}catch(e){}
+  return null;
+}
 async function maybeAutoAdvance(){
   const room=document.querySelector('svg.hg-room');
   if(!room)return;
@@ -410,6 +438,12 @@ async function maybeAutoAdvance(){
   const ms=new Date(room.dataset.hgEnds).getTime()-Date.now();
   if(ms>0)return;
   lastAutoAdvanceId=id;
+  // Winner banner first (Kevin, 2026-11-21): show who won on the live
+  // screen for a few seconds, then it goes away and the next item comes up.
+  try{
+    const nextId=await showWinnerBanner(id);
+    if(nextId){openItem(nextId);return;}
+  }catch(e){}
   try{
     const r=await j('/api/listings/'+id+'/next');
     if(r.ok&&r.next){openItem(r.next.id);}
@@ -989,6 +1023,10 @@ async function openItem(id){
     livePCs={};
   }
   liveListingId=id; lastAutoAdvanceId=null;
+  // Winner line (Kevin, 2026-11-21): the last winner's name stays near
+  // the bid button until the next auction starts. Once this item is live,
+  // the next auction is running, so the line goes away.
+  if(l.status==='live')lastWinner=null;
   // The Start panel (queued item, seller view) shows the start settings
   // used last time, so running them all the same is one tap on Start.
   const st=lastStartFor(l);
@@ -1012,6 +1050,11 @@ async function openItem(id){
   <p class="small" id="customBidMsg"></p></div>
   <p class="small">My Top Limit: set a max and the system bids the smallest step for you.</p>
   <label>My Top Limit $ <input id="tlAmt" type="number"></label><button class="btn ghost" onclick="setTop('${l.id}')">Set My Top Limit</button></div>`:'';
+  // Winner line near the bid button (Kevin, 2026-11-21): while the next
+  // item is still waiting to start, show who won the last one — it stays
+  // until the next auction starts. Only for the same seller's show, so
+  // opening a different seller's room never shows a stale winner.
+  const winnerLine=(lastWinner&&lastWinner.name&&l.status==='queued'&&l.seller===lastWinner.seller)?`<p style="background:#c9a227;color:#081426;border-radius:10px;padding:10px;font-weight:800;text-align:center">🏆 ${escHtml(lastWinner.name)} won ${escHtml(lastWinner.title||'the last item')}${lastWinner.amount!=null&&lastWinner.amount>0?` for $${lastWinner.amount}`:''}!</p>`:'';
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.revealed_item?`<p><b>🎲 Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}
@@ -1049,7 +1092,7 @@ async function openItem(id){
   <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <button class="btn ghost" id="flipCamBtn" style="display:none" onclick="flipCamera()">🔄 Flip camera — front / back</button>
   <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
-  ${bidBox}
+  ${winnerLine}${bidBox}
   <h3 style="margin-bottom:4px">Chat</h3><p class="small">Type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
