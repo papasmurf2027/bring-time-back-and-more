@@ -565,14 +565,37 @@ app.post('/api/auth/address', async (req, res) => {
   const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
   res.json({ ok: true, shippingAddress: fresh.shipping_address || '', user: _publicUser(fresh) });
 });
-// Switch roles after sign-up (Kevin, 2026-11-20): a buyer who wants to sell
-// taps one button instead of making a second account. Any signed-in user
-// can switch between buyer, seller, and buy-and-sell.
-app.post('/api/auth/role', async (req, res) => {
+// Role switch needs an email code (Kevin, 2026-11-20): you can switch
+// roles, but only after a code is emailed to your account's email.
+// Step 1 — ask for the code. A 6-digit code is emailed to the account's
+// email (Resend when a key is set). If no email key is set yet, the code
+// comes back in the response instead (manual mode) so the switch still
+// works until the site's email is set up — once a key is set, the code
+// only ever goes by email and is never shown on screen.
+app.post('/api/auth/role-request', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
   const role = String((req.body && req.body.role) || '').trim();
   if (!['buyer', 'seller', 'both'].includes(role)) return res.json({ ok: false, error: 'pick a role — buyer, seller, or buy and sell' });
-  await query('UPDATE users SET role=$1 WHERE id=$2', [role, u.id]);
+  if (role === u.role) return res.json({ ok: false, error: 'your account is already ' + (role === 'both' ? 'buy and sell' : role) });
+  const code = String(Math.floor(100000 + Math.random() * 900000));
+  const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString();
+  await query('UPDATE role_switches SET used=1 WHERE user_id=$1 AND used=0', [u.id]);
+  await query('INSERT INTO role_switches(id,user_id,requested_role,code_hash,expires_at,used,created_at) VALUES($1,$2,$3,$4,$5,0,$6)', [uid(), u.id, role, _hashToken(code), expiresAt, nowISO()]);
+  const roleName = role === 'both' ? 'Buy and sell' : (role === 'seller' ? 'Sell' : 'Buy');
+  const sent = await _sendAccountEmail(u.email, 'Your Bring Time Back and More switch code', 'Hi ' + u.name + ',\n\nYou asked to switch your account to ' + roleName + '. Type this code on the site to switch:\n\n' + code + '\n\nThe code works for 1 hour. If you did not ask to switch, ignore this email — your account stays as it is.\n\nBring Time Back and More');
+  if (sent.sent) return res.json({ ok: true, sent: true, email: u.email, role });
+  return res.json({ ok: true, sent: false, mode: 'manual', code, role });
+});
+// Step 2 — type the emailed code to switch. One-time, 1 hour, then it is used up.
+app.post('/api/auth/role-confirm', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const code = String((req.body && req.body.code) || '').trim();
+  if (!code) return res.json({ ok: false, error: 'type the code from the email' });
+  const row = await queryOne('SELECT * FROM role_switches WHERE user_id=$1 AND code_hash=$2 AND used=0 ORDER BY created_at DESC LIMIT 1', [u.id, _hashToken(code)]);
+  if (!row) return res.json({ ok: false, error: 'that code is not right — check the email and try again' });
+  if (new Date(row.expires_at).getTime() < Date.now()) return res.json({ ok: false, error: 'that code expired — ask for a new one' });
+  await query('UPDATE role_switches SET used=1 WHERE id=$1', [row.id]);
+  await query('UPDATE users SET role=$1 WHERE id=$2', [row.requested_role, u.id]);
   const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
   res.json({ ok: true, user: _publicUser(fresh) });
 });

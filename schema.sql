@@ -162,6 +162,13 @@ CREATE TABLE IF NOT EXISTS password_resets (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
   expires_at TEXT NOT NULL, used INTEGER DEFAULT 0
 );
+-- Role-switch codes (Kevin, 2026-11-20): switching roles needs a code
+-- emailed to the account's email. The code is one-time, expires in 1 hour.
+CREATE TABLE IF NOT EXISTS role_switches (
+  id TEXT PRIMARY KEY, user_id TEXT NOT NULL, requested_role TEXT NOT NULL,
+  code_hash TEXT NOT NULL, expires_at TEXT NOT NULL, used INTEGER DEFAULT 0,
+  created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS seller_tokens (
   id TEXT PRIMARY KEY, seller TEXT NOT NULL, token_hash TEXT NOT NULL, created_at TEXT NOT NULL
 );
