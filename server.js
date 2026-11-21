@@ -1053,6 +1053,16 @@ app.get('/api/my-activity', async (req, res) => {
   if (!u) return res.status(401).json({ ok: false, error: 'not signed in' });
   const bought = await query("SELECT * FROM listings WHERE (winner_user_id=$1 OR winner=$2) AND status='sold' ORDER BY created_at DESC", [u.id, u.name]);
   const sold = await query("SELECT * FROM listings WHERE seller=$1 AND status='sold' ORDER BY created_at DESC", [u.name]);
+  // Which of these sold items have been rated (a Scorecard review left for
+  // the sale) — so the profile can show the Rated step in the process.
+  // (Kevin, 2026-11-20: the inbox shows Won → Shipped → Tracking → Rated → Final.)
+  const _ids = [...bought, ...sold].map(x => x.id);
+  const _rated = new Set();
+  if (_ids.length) {
+    const _ph = _ids.map((_, i) => '$' + (i + 1)).join(',');
+    const _rv = await query('SELECT listing_id FROM reviews WHERE listing_id IN (' + _ph + ')', _ids);
+    _rv.forEach(x => _rated.add(x.listing_id));
+  }
   const stageOf = (l) => {
     if (l.escrow_status === 'released') return 'finalized';
     if (l.escrow_status === 'refunded') return 'refunded';
@@ -1067,7 +1077,8 @@ app.get('/api/my-activity', async (req, res) => {
     shipping: l.shipping || 0,
     seller: l.seller, winner: l.winner,
     stage: stageOf(l), tracking: l.tracking || '', carrier: l.carrier || '',
-    delivered: !!l.delivered, created_at: l.created_at, image_url: l.image_url || ''
+    delivered: !!l.delivered, shipped: !!l.shipped_at, rated: _rated.has(l.id),
+    created_at: l.created_at, image_url: l.image_url || ''
   });
   res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean) });
 });
@@ -1990,6 +2001,12 @@ async function receiptFor(l, req) {
 app.get('/api/receipt/:listingId', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.listingId]);
   if (!l) return res.json({ ok: false, error: 'not found' });
+  // A receipt is private — only the buyer (winner), the seller, or the
+  // owner can see it. Nobody else. The owner sees it for every sale on
+  // the site, and for anything they buy themself. (Kevin, 2026-11-20.)
+  const _u = await _userFromSession(req);
+  const _isSeller = _u && (l.seller_user_id ? _u.id === l.seller_user_id : _u.name === l.seller);
+  if (!_ownerOk(req) && !_winnerIsUser(_u, l) && !_isSeller) return res.status(403).json({ ok: false, error: 'only the buyer, the seller or the owner can see the receipt' });
   let r = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [req.params.listingId]);
   if (!r) {
     if (l.status !== 'sold') return res.json({ ok: false, error: 'no receipt yet — sale has not completed' });
