@@ -303,6 +303,7 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN return_delivered_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE users ADD COLUMN rules_agreed INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE users ADD COLUMN photo TEXT DEFAULT \'\''); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_photo_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_video_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_at TEXT'); } catch (e) { /* column already exists */ }
@@ -353,7 +354,7 @@ function _passwordOk(password, salt, hash) {
     return crypto.timingSafeEqual(a, b);
   } catch (e) { return false; }
 }
-function _publicUser(u) { return u ? { id: u.id, name: u.name, email: u.email, role: u.role, emailVerified: !!u.email_verified, shippingAddress: u.shipping_address || '', hasSecurityQuestion: !!(u.security_question || '').trim() } : null; }
+function _publicUser(u) { return u ? { id: u.id, name: u.name, email: u.email, role: u.role, emailVerified: !!u.email_verified, shippingAddress: u.shipping_address || '', hasSecurityQuestion: !!(u.security_question || '').trim(), photo: u.photo || '' } : null; }
 // Security question (Kevin, 2026-11-19): the answer is hashed with scrypt
 // and its own salt, exactly like a password. It is never stored plain and
 // never returned by any endpoint. Answers are compared case-insensitively
@@ -580,6 +581,64 @@ app.post('/api/auth/address', async (req, res) => {
   await query('UPDATE users SET shipping_address=$1 WHERE id=$2', [address, u.id]);
   const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
   res.json({ ok: true, shippingAddress: fresh.shipping_address || '', user: _publicUser(fresh) });
+});
+// Change username (Kevin, 2026-11-20): change your display name from My
+// Profile. The new name must be free (names are unique) and must pass the
+// same checks as sign-up (no links, advertising or banned items). The name
+// is stored as plain text in many places — listings, bids, chats, follows,
+// reviews, private messages, shows, giveaways — so changing it updates
+// every one of those rows to the new name, so nothing still shows the old
+// one. The account itself is by user id, so the session and the seller
+// token keep working.
+app.post('/api/auth/username', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const oldName = u.name;
+  const name = String((req.body && req.body.name) || '').trim().slice(0, 100);
+  if (!name) return res.json({ ok: false, error: 'type a new username' });
+  if (name === oldName) return res.json({ ok: false, error: 'that is already your username' });
+  if (adHit(name) || bannedHit(name)) return res.json({ ok: false, error: 'that name cannot be used — no links, advertising or banned items in a display name' });
+  const taken = await queryOne('SELECT id FROM users WHERE LOWER(name)=LOWER($1) AND id<>$2', [name, u.id]);
+  if (taken) return res.json({ ok: false, error: 'that username is already taken — pick a different one' });
+  await query('UPDATE users SET name=$1 WHERE id=$2', [name, u.id]);
+  await query('UPDATE listings SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE listings SET winner=$1 WHERE winner=$2', [name, oldName]);
+  await query('UPDATE listings SET buy_now_offer_by=$1 WHERE buy_now_offer_by=$2', [name, oldName]);
+  await query('UPDATE bids SET bidder=$1 WHERE bidder=$2', [name, oldName]);
+  await query('UPDATE chats SET name=$1 WHERE name=$2', [name, oldName]);
+  await query('UPDATE follows SET buyer=$1 WHERE buyer=$2', [name, oldName]);
+  await query('UPDATE follows SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE drops SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE drops SET winner=$1 WHERE winner=$2', [name, oldName]);
+  await query('UPDATE drop_entries SET name=$1 WHERE name=$2', [name, oldName]);
+  await query('UPDATE top_limits SET buyer=$1 WHERE buyer=$2', [name, oldName]);
+  await query('UPDATE reviews SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE reviews SET reviewer=$1 WHERE reviewer=$2', [name, oldName]);
+  await query('UPDATE shows SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE waitlist SET name=$1 WHERE email=$2', [name, u.email]);
+  await query('UPDATE founding SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE refunds SET requester=$1 WHERE requester=$2', [name, oldName]);
+  await query('UPDATE incorrect_claims SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE bad_listing_strikes SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE private_messages SET sender=$1 WHERE sender=$2', [name, oldName]);
+  await query('UPDATE private_messages SET recipient=$1 WHERE recipient=$2', [name, oldName]);
+  await query('UPDATE seller_tokens SET seller=$1 WHERE seller=$2', [name, oldName]);
+  await query('UPDATE wheel_entries SET name=$1 WHERE name=$2', [name, oldName]);
+  const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
+  res.json({ ok: true, user: _publicUser(fresh) });
+});
+// Profile picture (Kevin, 2026-11-20): put your own picture next to your
+// name. Send a data:image (the profile page resizes it small first) or an
+// empty photo to remove it. Only an uploaded image or a https link is
+// stored — the same check as listing photos.
+app.post('/api/auth/photo', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const photo = String((req.body && req.body.photo) || '').trim();
+  if (!photo) { await query('UPDATE users SET photo=$1 WHERE id=$2', ['', u.id]); const f = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]); return res.json({ ok: true, user: _publicUser(f) }); }
+  const safe = _safeImageUrl(photo);
+  if (safe === null) return res.json({ ok: false, error: 'that picture was not saved — pick an image from your phone or a https image link' });
+  await query('UPDATE users SET photo=$1 WHERE id=$2', [safe, u.id]);
+  const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
+  res.json({ ok: true, user: _publicUser(fresh) });
 });
 // Role switch needs an email code (Kevin, 2026-11-20): you can switch
 // roles, but only after a code is emailed to your account's email.
@@ -963,7 +1022,7 @@ async function attachSellerPresence(rows) {
 }
 app.get('/api/overview', async (req, res) => {
   const settings = await getSettings();
-  const listings = await attachSellerPresence(await attachWheelCounts(await hideSuspended(await query('SELECT * FROM listings ORDER BY created_at DESC'))));
+  const listings = await attachSellerPhotos(await attachSellerPresence(await attachWheelCounts(await hideSuspended(await query('SELECT * FROM listings ORDER BY created_at DESC')))));
   const founding = await foundingStatus();
   const liveNow = listings.filter(l => l.seller_live && l.seller_present);
   res.json({ name: 'Bring Time Back and More', prelaunch: !!settings.prelaunch, founding, taxPercent: settings.tax_percent, liveNowCount: liveNow.length, listings: listings.map(l => _stripWinnerAddress(l, req, null)), categories: CATEGORIES });
@@ -994,13 +1053,27 @@ app.get('/api/my-activity', async (req, res) => {
   });
   res.json({ ok: true, bought: bought.map(clean), sold: sold.map(clean) });
 });
+// Profile picture next to a seller's name (Kevin, 2026-11-20): look up
+// each listing's seller in users by name and attach their photo as
+// seller_photo, so cards and the item page can show it. One query for
+// all the sellers in the list, not one per listing.
+async function attachSellerPhotos(rows) {
+  if (!rows || !rows.length) return rows;
+  const sellers = [...new Set(rows.map(l => l.seller).filter(Boolean))];
+  if (!sellers.length) return rows;
+  const placeholders = sellers.map((_, i) => '$' + (i + 1)).join(',');
+  const photoRows = await query('SELECT name, photo FROM users WHERE name IN (' + placeholders + ')', sellers);
+  const byName = {};
+  for (const r of photoRows) byName[r.name] = r.photo || '';
+  return rows.map(l => ({ ...l, seller_photo: byName[l.seller] || '' }));
+}
 app.get('/api/listings', async (req, res) => {
   let rows = await query('SELECT * FROM listings ORDER BY created_at DESC');
   if (req.query.type) rows = rows.filter(l => l.type === req.query.type);
   if (req.query.category && req.query.category !== 'All') rows = rows.filter(l => l.category === req.query.category);
   if (req.query.status) rows = rows.filter(l => l.status === req.query.status);
   rows = await hideSuspended(rows);
-  res.json((await attachWheelCounts(rows)).map(l => _stripWinnerAddress(l, req, null)));
+  res.json((await attachSellerPhotos(await attachWheelCounts(rows))).map(l => _stripWinnerAddress(l, req, null)));
 });
 app.get('/api/listings/:id', async (req, res) => {
   const l = await queryOne('SELECT * FROM listings WHERE id=$1', [req.params.id]);
@@ -1017,7 +1090,8 @@ app.get('/api/listings/:id', async (req, res) => {
   const _viewer = await _userFromSession(req);
   const _entered = _viewer && l.type === 'wheel' ? !!(await queryOne('SELECT * FROM wheel_entries WHERE listing_id=$1 AND user_id=$2', [l.id, _viewer.id])) : false;
   const watching = await watchingCount(l);
-  res.json({ ..._stripWinnerAddress(l, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_entries: wheelEntries.map(e => ({ name: e.name })), wheel_count: wheelEntries.length, wheel_entered: _entered, watching, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
+  const _withPhoto = (await attachSellerPhotos([l]))[0] || l;
+  res.json({ ..._stripWinnerAddress(_withPhoto, req, _viewer), refund: refund || null, carrier: l.carrier || carrierFor(l.package_size), bids, chats, reviews, receipt, wheel_entries: wheelEntries.map(e => ({ name: e.name })), wheel_count: wheelEntries.length, wheel_entered: _entered, watching, qr_text: qr ? qr.qrText : null, qr_receipt: qr ? qr.receiptNo : null, qr_tracking: qr ? qr.tracking : null, qr_carrier: qr ? qr.carrier : null, package_label: shipLabel(l.package_size), payout });
 });
 // QR code for one won/sold item (after payment validates). Not a real postage label.
 app.get('/api/listings/:id/qr', async (req, res) => {
@@ -1050,7 +1124,7 @@ async function insertListing(b, title, description, type, wheelItems, shipAmt, s
   // refund — this flag never blocks those.
   const noCom = (b.noChangeOfMind || b.no_change_of_mind) ? 1 : 0;
   await query(`INSERT INTO listings(id,seller,title,description,category,type,start_price,current_bid,fixed_price,shipping,shipping_insured,carrier,authenticity,condition,timer_seconds,mode,status,created_at,ends_at,image_url,package_size,is_random,seller_user_id,no_change_of_mind)
-    VALUES($1,$2,$3,$4,$5,$6,$7,$7,$8,$9,$10,$11,$12,$13,$14,$15,'live',$16,$17,$18,$19,$20,$21,$22)`,
+    VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,'live',$17,$18,$19,$20,$21,$22,$23)`,
     [id, b.seller, title, description || '', b.category || 'Other', type, Number(b.startPrice || 0), Number(b.startPrice || 0), (type === 'buy_now' && b.fixedPrice) ? Number(b.fixedPrice) : null, shipAmt, b.shippingInsured ? 1 : 0, carrierFor(sizePrice !== null ? b.packageSize : ''), auth, cond, timer, b.mode || 'Regular', created.toISOString(), type === 'buy_now' ? null : ends.toISOString(), imgSafe, sizePrice !== null ? b.packageSize : '', isRandom ? 1 : 0, b.sellerUserId || null, noCom]);
   return id;
 }

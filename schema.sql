@@ -154,7 +154,7 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash TEXT NOT NULL, salt TEXT NOT NULL, role TEXT DEFAULT 'buyer',
   email_verified INTEGER DEFAULT 0, shipping_address TEXT DEFAULT '', created_at TEXT NOT NULL,
   security_question TEXT DEFAULT '', security_answer_hash TEXT DEFAULT '', security_answer_salt TEXT DEFAULT '',
-  rules_agreed INTEGER DEFAULT 0
+  rules_agreed INTEGER DEFAULT 0, photo TEXT DEFAULT ''
 );
 CREATE TABLE IF NOT EXISTS sessions (
   id TEXT PRIMARY KEY, user_id TEXT NOT NULL, token_hash TEXT NOT NULL,
