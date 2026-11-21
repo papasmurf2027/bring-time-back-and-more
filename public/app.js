@@ -271,8 +271,25 @@ async function load(){
   // every Random Item ever tried piles up as a list of cards (Kevin, 2026-11-20).
   // A seller's Store (curSeller) shows only that seller's fixed-price items.
   let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)&&(l.status==='queued'||l.status==='live')); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
+  // Random Items in one batch (Kevin, 2026-11-21): 59 random items made at
+  // once must not show as 59 separate cards — the list gets too long for
+  // the screen. Group queued Random Items made together (same seller, same
+  // base name, same settings) into ONE card for the whole batch, showing
+  // how many are in it. The room runs them in order from the first one.
+  const batchSeen={};
+  rows=rows.filter(l=>{
+    if(!(l.is_random&&l.status==='queued'))return true;
+    const base=l.title.replace(/\s+\d+$/,'');
+    const key=[l.seller,base,l.category,l.start_price,l.timer_seconds,l.mode,l.package_size,l.condition].join('|');
+    if(!batchSeen[key])batchSeen[key]={count:0,first:l};
+    batchSeen[key].count++;
+    if(batchSeen[key].first===l){l.randomBatchCount=batchSeen[key].count;return true;}
+    batchSeen[key].first.randomBatchCount=batchSeen[key].count;
+    return false;
+  });
   document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
+  ${l.is_random&&l.randomBatchCount>1?`<p class="small"><b>🎲 ${l.randomBatchCount} random items in this batch</b> — tap Open to join the room, they run one after another.</p>`:''}
   <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
@@ -570,6 +587,35 @@ async function savePayment(){
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
 function randomTimerSecondsValue(){const s=document.getElementById('sRandomTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sRandomTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
 function toggleRules(){var d=document.getElementById('rulesList');if(!d)return;var open=d.style.display!=='none';d.style.display=open?'none':'block';var b=document.getElementById('rulesToggleBtn');if(b)b.textContent=open?'Read the Rules':'Hide the Rules';}
+function toggleStartMenu(){var d=document.getElementById('startMenu');if(!d)return;var open=d.style.display!=='none';d.style.display=open?'none':'block';}
+// Start menu options are tap buttons in Kevin's own style — dark navy tiles
+// with a gold border, the picked one turns gold (same .tile style as the
+// Buy / Sell / Buy and sell bar). No dropdowns: tap $1 / $5 / $10 / $25 /
+// $50 / $100 / Custom for the start bid, tap 10s / 30s / 2min / Custom for
+// the time, tap Sudden Death / Regular for the mode. The picked value goes
+// into the hidden #startBid / #startTimer / #startMode fields, which
+// startAuction() reads — so the menu works whether it was opened or not.
+function pickStart(group,value,el){
+  if(group==='bid'){
+    const h=document.getElementById('startBid');
+    const w=document.getElementById('startBidCustomWrap');
+    if(value==='custom'){if(w)w.style.display='block';const c=document.getElementById('startBidCustom');if(c&&h&&c.value!=='')h.value=c.value;}
+    else{if(h)h.value=value;if(w)w.style.display='none';}
+  }
+  if(group==='time'){
+    const h=document.getElementById('startTimer');
+    if(h)h.value=value;
+    const c=document.getElementById('startTimerCustom');
+    if(c)c.style.display=value==='custom'?'block':'none';
+  }
+  if(group==='mode'){
+    const h=document.getElementById('startMode');
+    if(h)h.value=value;
+  }
+  const wrap=el.parentElement;
+  if(wrap)wrap.querySelectorAll('.tile').forEach(t=>t.classList.remove('active'));
+  el.classList.add('active');
+}
 function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
 function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
 function agreeRules(){var a=document.getElementById('aAgree');if(a)a.checked=true;var sa=document.getElementById('sAgree');if(sa)sa.checked=true;var s=document.getElementById('agreeStatusSignup');if(s)s.textContent='✓ You agreed to the Rules.';var s2=document.getElementById('agreeStatus');if(s2)s2.textContent='✓ You agreed to the Rules.';var s3=document.getElementById('rulesAgreeStatus');if(s3)s3.textContent='✓ You agreed to the Rules.';closeRulesModal();}
@@ -905,6 +951,26 @@ async function spinWheel(id){
     const close=document.getElementById('wheelOverlayClose'); if(close)close.style.display='block';
   },4300);
 }
+// Start settings memory (Kevin, 2026-11-21): when the room switches to the
+// next Random Item, the Start panel shows what was used LAST time — so if
+// the seller runs them all the same, they just hit "Start auction" and it
+// goes with the same start bid, time and mode, no re-typing it 59 times.
+// Saved in localStorage so it survives a page reload. If nothing was ever
+// set, the panel falls back to what the item was listed with.
+function lastStartFor(l){
+  let s=null; try{s=JSON.parse(localStorage.getItem('btb_last_start')||'null');}catch(e){}
+  const sp=(s&&typeof s.startPrice==='number')?s.startPrice:(l.current_bid||l.start_price||0);
+  const ts=(s&&typeof s.timerSeconds==='number')?s.timerSeconds:(l.timer_seconds||30);
+  const md=(s&&s.mode)?s.mode:(l.mode||'Sudden Death');
+  return {startPrice:sp,timerSeconds:ts,mode:md};
+}
+function saveLastStart(b){
+  try{
+    let cur={}; try{cur=JSON.parse(localStorage.getItem('btb_last_start')||'{}');}catch(e){}
+    const next={startPrice:(typeof b.startPrice==='number')?b.startPrice:cur.startPrice,timerSeconds:(typeof b.timerSeconds==='number')?b.timerSeconds:cur.timerSeconds,mode:b.mode||cur.mode};
+    localStorage.setItem('btb_last_start',JSON.stringify(next));
+  }catch(e){}
+}
 async function openItem(id){
   // Fetch first so we know whose item this is. When the live seller moves
   // to their own next item (auto-advance: Random Item 1 ends, the room goes
@@ -922,6 +988,9 @@ async function openItem(id){
     livePCs={};
   }
   liveListingId=id; lastAutoAdvanceId=null;
+  // The Start panel (queued item, seller view) shows the start settings
+  // used last time, so running them all the same is one tap on Start.
+  const st=lastStartFor(l);
   // Private messages about this item (Kevin, 2026-11-20): only the buyer
   // and the seller ever see them. The seller sees every buyer's thread;
   // a buyer only sees their own thread with this seller.
@@ -950,7 +1019,7 @@ async function openItem(id){
   ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start giveaway — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready. The timer starts then, and only this giveaway runs.</p>`:`<p class="small">The seller starts this giveaway when they're ready — stay in the room.</p>`}<p><b>FREE giveaway — no bidding.</b> Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
   :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`)
   :l.type==='auction'?(l.status==='queued'
-  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p class="small">Set it when this item comes up — only when switching to it, not before. The timer starts when you tap Start.</p><label>Start at $ <input id="startBid" type="number" min="0" value="${l.current_bid||l.start_price||0}"></label><label>How long <select id="startTimer" onchange="const c=document.getElementById('startTimerCustom');if(c)c.style.display=this.value==='custom'?'block':'none'"><option value="10"${(l.timer_seconds||30)===10?' selected':''}>10 seconds</option><option value="30"${(l.timer_seconds||30)===30?' selected':''}>30 seconds</option><option value="120"${(l.timer_seconds||30)===120?' selected':''}>2 minutes</option><option value="custom">Custom — type the seconds</option></select></label><label id="startTimerCustom" style="display:none">Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${l.timer_seconds||30}"></label><label>Mode <select id="startMode"><option${(l.mode||'Sudden Death')==='Sudden Death'?' selected':''}>Sudden Death</option><option${l.mode==='Regular'?' selected':''}>Regular</option></select></label><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p><button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
+  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p><b>${escHtml(l.title)}</b> — runs the same as the last one: Start at $${st.startPrice} • ${st.timerSeconds} seconds • ${st.mode}.</p><button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button> <button class="btn ghost" id="startMenuBtn" style="padding:14px 14px;font-size:20px;line-height:1" onclick="toggleStartMenu()" title="Change start settings">⋯</button><div id="startMenu" style="display:none;margin-top:10px"><p class="small">Tap to change it — start bid, time, Regular or Sudden Death. The timer starts when you tap Start auction.</p><p class="small"><b>Start at</b></p><div class="tiles"><input type="hidden" id="startBid" value="${st.startPrice}">${[1,5,10,25,50,100].map(v=>`<span class="tile${st.startPrice===v?' active':''}" onclick="pickStart('bid',${v},this)">$${v}</span>`).join('')}<span class="tile${![1,5,10,25,50,100].includes(st.startPrice)?' active':''}" onclick="pickStart('bid','custom',this)">Custom</span></div><div id="startBidCustomWrap" style="display:${![1,5,10,25,50,100].includes(st.startPrice)?'block':'none'};margin-top:8px"><label>Custom start $ <input id="startBidCustom" type="number" min="0" value="${st.startPrice}" oninput="document.getElementById('startBid').value=this.value"></label></div><p class="small"><b>How long</b></p><div class="tiles"><input type="hidden" id="startTimer" value="${[10,30,120].includes(st.timerSeconds)?st.timerSeconds:'custom'}"><span class="tile${st.timerSeconds===10?' active':''}" onclick="pickStart('time',10,this)">10 seconds</span><span class="tile${st.timerSeconds===30?' active':''}" onclick="pickStart('time',30,this)">30 seconds</span><span class="tile${st.timerSeconds===120?' active':''}" onclick="pickStart('time',120,this)">2 minutes</span><span class="tile${![10,30,120].includes(st.timerSeconds)?' active':''}" onclick="pickStart('time','custom',this)">Custom</span></div><div id="startTimerCustom" style="display:${![10,30,120].includes(st.timerSeconds)?'block':'none'};margin-top:8px"><label>Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${st.timerSeconds}"></label></div><p class="small"><b>Mode</b></p><div class="tiles"><input type="hidden" id="startMode" value="${st.mode}"><span class="tile${st.mode==='Sudden Death'?' active':''}" onclick="pickStart('mode','Sudden Death',this)">Sudden Death</span><span class="tile${st.mode==='Regular'?' active':''}" onclick="pickStart('mode','Regular',this)">Regular</span></div><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p></div></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
   :`<p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>`)
   :`<p>Store price $${l.fixed_price} + $${l.shipping} shipping = $${l.fixed_price+l.shipping} total</p>
   <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p>
@@ -1038,6 +1107,11 @@ async function startAuction(id){
   }
   const mEl=document.getElementById('startMode');
   if(mEl&&mEl.value)body.mode=mEl.value;
+  // Remember what was used, so the next item's Start panel comes up with
+  // the same start bid, time and mode — run them all the same with one tap
+  // on Start auction (Kevin, 2026-11-21). If the panel is not on the page,
+  // there is nothing new to remember.
+  if(body.startPrice!==undefined||body.timerSeconds!==undefined||body.mode!==undefined)saveLastStart({startPrice:body.startPrice,timerSeconds:body.timerSeconds,mode:body.mode});
   const r=await j('/api/listings/'+id+'/start',body,sellerHeaders(seller));
   noteSellerToken(seller,r);
   if(!r.ok){alert('Error: '+r.error);return;}
