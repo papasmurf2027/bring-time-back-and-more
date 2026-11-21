@@ -836,10 +836,19 @@ async function chat(id){if(needSignIn())return;const r=await j('/api/listings/'+
 async function goLive(id){
   if(needSignIn())return;
   const seller=authName()||document.getElementById('cName').value;
+  // Make sure this browser has a fresh seller token before going live,
+  // so a stale or missing token does not block the show (Kevin, 2026-11-20:
+  // he listed something and Go Live did not work).
+  await syncSellerToken();
   // Camera first: if the seller blocks it, do not mark the room live.
+  // Try the back camera first (best for showing items), then fall back
+  // to any camera — a strict back-camera request fails on some phones.
   let stream;
   try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true});}
-  catch(e){alert('Camera / mic blocked — allow camera access in your browser settings and try again.');return;}
+  catch(e1){
+    try{stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});}
+    catch(e2){alert('Camera / mic blocked — this site needs camera and microphone access to go live. Allow it for this site in your browser settings, then tap Go Live again.');return;}
+  }
   const r=await j('/api/listings/'+id+'/go-live',{seller},sellerHeaders(seller));noteSellerToken(seller,r);
   if(!r.ok){stream.getTracks().forEach(t=>t.stop());alert('Error: '+r.error);return;}
   // Stop any viewer connection from this browser, then broadcast.
@@ -890,7 +899,19 @@ async function loadKeepTrack(){
   box.innerHTML=`<p><b>People you're keeping track of (${mine.length})</b>${mine.length?'<br>'+mine.map(x=>`${escHtml(x.seller)}${x.liveNow?' — <span class="badge">🔴 LIVE NOW</span>':''}${x.nextShow?' — next show '+escHtml(x.nextShow):''} <button class="btn ghost" onclick="unfollowSeller('${escJs(x.seller)}')">Stop</button>`).join('<br>'):' — nobody yet.'}</p><p><b>People keeping track of you (${fr.count})</b>${fr.followers.length?': '+fr.followers.map(escHtml).join(', '):' — nobody yet.'}</p>`;
 }
 async function saveShow(id){if(needSignIn())return;const r=await j('/api/shows/'+id+'/save',{});if(!r.ok){alert('Error: '+r.error);return;}load();}
-async function makeShow(){if(needSignIn())return;const r=await j('/api/shows',{title:document.getElementById('cTitle').value,startsAt:new Date(document.getElementById('cWhen').value).toISOString()});alert(r.ok?'Show scheduled':'Error');load();}
+async function makeShow(){
+  if(needSignIn())return;
+  // Schedule a show (Kevin, 2026-11-20): a missing title or date used to
+  // fail silently — new Date('').toISOString() throws and nothing
+  // happened, no message at all. Now it says what is missing first.
+  const title=document.getElementById('cTitle').value.trim();
+  const when=document.getElementById('cWhen').value;
+  if(!title){alert('Give your show a title first.');return;}
+  if(!when){alert('Pick a date and time for your show first.');return;}
+  const r=await j('/api/shows',{title,startsAt:new Date(when).toISOString()});
+  alert(r.ok?'Show scheduled — it shows under Coming Up.':'Error: '+(r.error||''));
+  load();
+}
 async function joinWaitlist(){const r=await j('/api/waitlist',{name:document.getElementById('wName').value,email:document.getElementById('wEmail').value,founding:document.getElementById('wFound').checked});
   if(!r.ok){document.getElementById('waitMsg').textContent=r.error;return;}
   document.getElementById('waitMsg').textContent=r.message||"You're on the list!";
