@@ -304,6 +304,8 @@ async function init() {
   try { await query('ALTER TABLE refunds ADD COLUMN decided_at TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE users ADD COLUMN rules_agreed INTEGER DEFAULT 0'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE users ADD COLUMN photo TEXT DEFAULT \'\''); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE users ADD COLUMN payment_method TEXT DEFAULT \'\''); } catch (e) { /* column already exists */ }
+  try { await query('ALTER TABLE users ADD COLUMN payment_detail TEXT DEFAULT \'\''); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_photo_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_video_name TEXT'); } catch (e) { /* column already exists */ }
   try { await query('ALTER TABLE refunds ADD COLUMN dispute_at TEXT'); } catch (e) { /* column already exists */ }
@@ -354,7 +356,7 @@ function _passwordOk(password, salt, hash) {
     return crypto.timingSafeEqual(a, b);
   } catch (e) { return false; }
 }
-function _publicUser(u) { return u ? { id: u.id, name: u.name, email: u.email, role: u.role, emailVerified: !!u.email_verified, shippingAddress: u.shipping_address || '', hasSecurityQuestion: !!(u.security_question || '').trim(), photo: u.photo || '' } : null; }
+function _publicUser(u) { return u ? { id: u.id, name: u.name, email: u.email, role: u.role, emailVerified: !!u.email_verified, shippingAddress: u.shipping_address || '', hasSecurityQuestion: !!(u.security_question || '').trim(), photo: u.photo || '', paymentMethod: u.payment_method || '', hasPaymentDetail: !!(u.payment_detail || '').trim() } : null; }
 // Security question (Kevin, 2026-11-19): the answer is hashed with scrypt
 // and its own salt, exactly like a password. It is never stored plain and
 // never returned by any endpoint. Answers are compared case-insensitively
@@ -637,6 +639,22 @@ app.post('/api/auth/photo', async (req, res) => {
   const safe = _safeImageUrl(photo);
   if (safe === null) return res.json({ ok: false, error: 'that picture was not saved — pick an image from your phone or a https image link' });
   await query('UPDATE users SET photo=$1 WHERE id=$2', [safe, u.id]);
+  const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
+  res.json({ ok: true, user: _publicUser(fresh) });
+});
+// Payment method saved in the profile (Kevin, 2026-11-20): a buyer sets
+// their payment method once in My Profile, and the room never asks for it
+// again — Buy Now and Pay now just use what is saved here. TEST MODE ONLY:
+// the detail is a test value (never a real card number); at go-live Stripe
+// replaces this whole flow and no card data is stored on the site.
+const PAYMENT_METHODS = ['card', 'PayPal', 'Apple Pay', 'Google Pay', 'Cash App', 'Venmo', 'bank'];
+app.post('/api/auth/payment', async (req, res) => {
+  const u = await requireAuth(req, res); if (!u) return;
+  const method = String((req.body && req.body.method) || '').trim();
+  const detail = String((req.body && req.body.detail) || '').trim();
+  if (!PAYMENT_METHODS.includes(method)) return res.json({ ok: false, error: 'pick a payment method' });
+  if (!detail) return res.json({ ok: false, error: 'type your payment detail' });
+  await query('UPDATE users SET payment_method=$1, payment_detail=$2 WHERE id=$3', [method, detail.slice(0, 200), u.id]);
   const fresh = await queryOne('SELECT * FROM users WHERE id=$1', [u.id]);
   res.json({ ok: true, user: _publicUser(fresh) });
 });
@@ -1357,7 +1375,10 @@ app.post('/api/listings/:id/buy-now', async (req, res) => {
   if (!l || l.type !== 'buy_now') return res.json({ ok: false, error: 'not a Store listing' });
   if (l.status !== 'live') return res.json({ ok: false, error: 'already sold' });
   if (_needsAddress(u)) return res.json({ ok: false, error: ADDRESS_REQUIRED_ERROR });
-  const r = await completeSale(l, u.name, req.body.method, req.body.detail, u.shipping_address, u.id);
+  // Payment comes from the profile (Kevin, 2026-11-20) — the room never asks
+  // for it. If the buyer has not set one, they set it in My Profile first.
+  if (!u.payment_method || !(u.payment_detail || '').trim()) return res.json({ ok: false, error: 'Set up your payment method in My Profile first — tap My Profile, then Payment method.' });
+  const r = await completeSale(l, u.name, u.payment_method, u.payment_detail, u.shipping_address, u.id);
   res.json(r);
 });
 app.post('/api/listings/:id/pay', async (req, res) => {
@@ -1366,7 +1387,10 @@ app.post('/api/listings/:id/pay', async (req, res) => {
   if (!l || l.status !== 'ended') return res.json({ ok: false, error: 'auction has not ended / no winner to pay' });
   if (!_winnerIsUser(u, l)) return res.json({ ok: false, error: 'only the winner can pay for this item' });
   if (_needsAddress(u)) return res.json({ ok: false, error: ADDRESS_REQUIRED_ERROR });
-  const r = await completeSale(l, l.winner, req.body.method, req.body.detail, u.shipping_address, u.id);
+  // Payment comes from the profile (Kevin, 2026-11-20) — the room never asks
+  // for it. If the winner has not set one, they set it in My Profile first.
+  if (!u.payment_method || !(u.payment_detail || '').trim()) return res.json({ ok: false, error: 'Set up your payment method in My Profile first — tap My Profile, then Payment method.' });
+  const r = await completeSale(l, l.winner, u.payment_method, u.payment_detail, u.shipping_address, u.id);
   res.json(r);
 });
 app.post('/api/listings/:id/notify-fix', async (req, res) => {
