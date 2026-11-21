@@ -2617,7 +2617,18 @@ app.get('/api/dashboard', async (req, res) => {
     stuckSales.push({ id: _sl.id, title: _sl.title, seller: _sl.seller, winner: _sl.winner, shippedAt: _sl.shipped_at || null, saleDate: new Date(_sd).toISOString(), daysSinceSale: Math.floor((Date.now() - _sd) / (24 * 3600 * 1000)), neverArrivedRefundId: _nr ? _nr.id : null });
   }
   const neverArrivedRefunds = refunds.filter(rf => rf.reason === 'never arrived').map(rf => ({ id: rf.id, listingId: rf.listing_id, title: rf.title, requester: rf.requester, createdAt: rf.created_at, status: rf.status }));
-  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, badListingStrikes, stuckSales, neverArrivedRefunds, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
+  // Owner inbox (Kevin, 2026-11-21): every sale on the site, all sellers —
+  // separate from "What I sold" on My Profile, which is only the items the
+  // owner themself sold as a seller. Each row has a Receipt button so the
+  // owner can click one to see its receipt.
+  const _allSold = await query("SELECT * FROM listings WHERE status='sold' ORDER BY created_at DESC");
+  const ownerInbox = [];
+  for (const _sl of _allSold) {
+    const _sr = await queryOne('SELECT * FROM receipts WHERE listing_id=$1', [_sl.id]);
+    const _amt = _sl.type === 'buy_now' ? (_sl.fixed_price || 0) : (_sl.current_bid || 0);
+    ownerInbox.push({ id: _sl.id, title: _sl.title, type: _sl.type, seller: _sl.seller, winner: _sl.winner || '', price: _amt, shipping: _sl.shipping || 0, total: _sr ? _sr.total : (_amt + (_sl.shipping || 0)), receiptNo: _sr ? _sr.receipt_no : '', date: _sr ? _sr.created_at : _sl.created_at, escrow: _sl.escrow_status || '', delivered: !!_sl.delivered });
+  }
+  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, badListingStrikes, stuckSales, neverArrivedRefunds, ownerInbox, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
 });
 app.post('/api/settings/tax', async (req, res) => {
   if (!requireOwner(req, res)) return;
