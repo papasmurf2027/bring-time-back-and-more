@@ -1238,14 +1238,23 @@ app.post('/api/listings/:id/reveal', async (req, res) => {
   if (!l.is_random) return res.json({ ok: false, error: 'this is not a Random Item' });
   if (!await requireSellerFor(req, res, l)) return;
   const _tok = await checkSellerToken(req, res, l.seller); if (!_tok) return;
-  if (l.status !== 'sold' || l.payment_status !== 'validated') return res.json({ ok: false, error: 'the winner has to win and pay first — then say what they won' });
+  // Reveal when you show it live (Kevin, 2026-11-20): the seller says what
+  // the Random Item is while holding it up on camera — during the auction,
+  // not only after the winner pays. The reveal is saved on the listing and
+  // shown on the receipt, the video receipt and the ship-QR section.
   const revealed = String(req.body.revealedItem || req.body.revealed || '').trim().slice(0, 120);
   if (!revealed) return res.json({ ok: false, error: 'type what they won — e.g. Invicta Lupah watch' });
   if (adHit(revealed)) return res.json({ ok: false, error: AD_ERROR });
-  await query('UPDATE listings SET revealed_item=$1, revealed_at=$2 WHERE id=$3', [revealed, nowISO(), l.id]);
+  // The seller can also set the real condition here — Random Items may be
+  // listed as "Say it live in chat", and this is where the real condition
+  // gets recorded once the item is shown.
+  const CONDITIONS = ['New', 'Used – Working', 'Used – Working Project', 'Used – Not Working / Project / For Parts'];
+  const newCond = String(req.body.condition || '').trim();
+  const condOk = newCond && CONDITIONS.includes(newCond);
+  await query('UPDATE listings SET revealed_item=$1, revealed_at=$2' + (condOk ? ', condition=$3' : '') + ' WHERE id=$' + (condOk ? '4' : '3'), condOk ? [revealed, nowISO(), newCond, l.id] : [revealed, nowISO(), l.id]);
   await query('INSERT INTO chats(id,listing_id,name,message,is_seller,created_at) VALUES($1,$2,$3,$4,1,$5)',
-    [uid(), l.id, l.seller, `🎲 Revealed live on camera: ${revealed} — that is what ${l.winner} won.`, nowISO()]);
-  res.json({ ok: true, revealedItem: revealed, ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
+    [uid(), l.id, l.seller, `🎲 Revealed live on camera: ${revealed}${l.winner ? ' — that is what ' + l.winner + ' won.' : ' — this is the item up for auction.'}`, nowISO()]);
+  res.json({ ok: true, revealedItem: revealed, ...(condOk ? { condition: newCond } : {}), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // ---------- Bidding ----------
 app.post('/api/listings/:id/bid', async (req, res) => {
