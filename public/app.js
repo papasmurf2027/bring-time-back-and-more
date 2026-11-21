@@ -186,6 +186,18 @@ function processLine(l){
   const final=l.stage==='refunded'?'Refunded':l.stage==='finalized'?'Final ✓':'Final — not yet';
   return `<span class="small">${won} → ${shipped} → ${escHtml(tracking)} → ${rated} → ${final}</span>`;
 }
+// "You won!" prompts on My Profile (Kevin, 2026-11-21): the winner gets a
+// prompt telling them they won, with a Pay now button. They can delete a
+// prompt (✕) so the profile does not flood with them — deleting the prompt
+// only hides that notice, the win itself stays in the receipt and in
+// What I bought once paid. Dismissed ids live in localStorage.
+function wonDismissed(){
+  try{return JSON.parse(localStorage.getItem('btb_won_dismissed')||'[]');}catch(e){return[];}
+}
+function dismissWon(id){
+  try{const d=wonDismissed(); if(!d.includes(id))d.push(id); localStorage.setItem('btb_won_dismissed',JSON.stringify(d));}catch(e){}
+  loadProfile();
+}
 async function loadProfile(){
   const box=document.getElementById('profileBody'); if(!box)return;
   if(!currentUser){box.innerHTML='<p><b>You are not signed in.</b></p><p>Sign up or sign in in Your account below to see your profile.</p>';return;}
@@ -229,10 +241,13 @@ async function showReceipt(id, boxId){
     </div>`;
   box.scrollIntoView({behavior:'smooth',block:'start'});
 }
+  // Hide "You won!" prompts the user deleted, so the profile does not
+  // flood — the win itself stays in the receipt and in What I bought.
+  const wonShow=(act.wonUnpaid||[]).filter(l=>!wonDismissed().includes(l.id));
   box.innerHTML=`
     <p style="font-size:20px;margin:0 0 4px">${sellerPhotoImg(u.photo,72)}<b>You're signed in as ${escHtml(u.name)}</b></p>
     <p>${roleName} • ${escHtml(u.email)}</p>
-    ${(act.wonUnpaid&&act.wonUnpaid.length)?`<div style="background:linear-gradient(135deg,#c9a227,#f5d76e);color:#081426;border-radius:12px;padding:14px;margin:10px 0"><h3 style="margin-top:0">🏆 You won!</h3>${act.wonUnpaid.map(l=>`<p><b>${escHtml(l.title)}</b> — you won it for $${l.price}${l.shipping?` + $${l.shipping} shipping`:''} • from ${escHtml(l.seller)}<br><button class="btn" onclick="payWinner('${l.id}')">Pay now</button> <button class="btn ghost" onclick="openItem('${l.id}')">Open item</button></p>`).join('')}<p class="small">Pay now so the seller can ship it — the money goes into escrow hold until it arrives.</p></div>`:''}
+    ${(wonShow.length)?`<div style="background:linear-gradient(135deg,#c9a227,#f5d76e);color:#081426;border-radius:12px;padding:14px;margin:10px 0"><h3 style="margin-top:0">🏆 You won!</h3>${wonShow.map(l=>`<p><b>${escHtml(l.title)}</b> — you won it for $${l.price}${l.shipping?` + $${l.shipping} shipping`:''} • from ${escHtml(l.seller)}<br><button class="btn" onclick="payWinner('${l.id}')">Pay now</button> <button class="btn ghost" onclick="openItem('${l.id}')">Open item</button> <button class="btn ghost" onclick="dismissWon('${l.id}')">✕ Delete</button></p>`).join('')}<p class="small">Pay now so the seller can ship it — the money goes into escrow hold until it arrives. Tap ✕ Delete to clear a notice — the win stays in your receipt and in What I bought.</p></div>`:''}
     <h3>Your name and picture</h3>
     <p class="small">Your username is what people see next to your listings, bids and messages. Your picture shows next to your name. Changing your username changes it everywhere — your old listings, bids and messages show the new name too.</p>
     <label>Username <input id="newName" value="${escHtml(u.name)}" maxlength="100"></label>
@@ -418,11 +433,11 @@ async function showWinnerBanner(id){
   if(box&&l){
     const name=l.winner?escHtml(l.winner):null;
     const amt=(l.type==='auction'&&l.current_bid!=null)?Number(l.current_bid):null;
-    lastWinner={name:l.winner||'',amount:amt,title:l.title||'',type:l.type||'auction',seller:l.seller||''};
+    lastWinner={name:l.winner||'',amount:amt,seller:l.seller||''};
     const div=document.createElement('div');
     div.id='winnerBanner';
     div.style.cssText='background:linear-gradient(135deg,#c9a227,#f5d76e);color:#081426;border-radius:12px;padding:16px;margin-top:10px;text-align:center;font-size:20px;font-weight:800';
-    div.innerHTML=name?`🏆 ${name} won ${escHtml(l.title||'this item')}${amt!=null&&amt>0?` for $${amt}`:''}!`:`Auction ended — no bids, no winner.`;
+    div.innerHTML=name?`🏆 ${name} won!`:`Auction ended — no bids, no winner.`;
     box.prepend(div);
     await new Promise(res=>setTimeout(res,5000));
     if(div.parentNode)div.parentNode.removeChild(div);
@@ -1054,7 +1069,7 @@ async function openItem(id){
   // item is still waiting to start, show who won the last one — it stays
   // until the next auction starts. Only for the same seller's show, so
   // opening a different seller's room never shows a stale winner.
-  const winnerLine=(lastWinner&&lastWinner.name&&l.status==='queued'&&l.seller===lastWinner.seller)?`<p style="background:#c9a227;color:#081426;border-radius:10px;padding:10px;font-weight:800;text-align:center">🏆 ${escHtml(lastWinner.name)} won ${escHtml(lastWinner.title||'the last item')}${lastWinner.amount!=null&&lastWinner.amount>0?` for $${lastWinner.amount}`:''}!</p>`:'';
+  const winnerLine=(lastWinner&&lastWinner.name&&l.status==='queued'&&l.seller===lastWinner.seller)?`<p style="background:#c9a227;color:#081426;border-radius:10px;padding:10px;font-weight:800;text-align:center">🏆 ${escHtml(lastWinner.name)} won${lastWinner.amount!=null&&lastWinner.amount>0?` it for $${lastWinner.amount}`:''}!</p>`:'';
   const el=document.getElementById('detail'); el.scrollIntoView();
   el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.revealed_item?`<p><b>🎲 Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}
