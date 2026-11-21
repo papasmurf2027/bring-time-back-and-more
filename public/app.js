@@ -401,6 +401,7 @@ function updateHourglasses(){
 // to the seller's next queued item on its own — no scrolling down to find
 // it. Only once per item, so it never loops.
 let lastAutoAdvanceId=null;
+let lastOpenedItemId=null; // openItem scrolls to the room only when a NEW item is opened, not on re-renders (bid, chat, etc.)
 async function maybeAutoAdvance(){
   const room=document.querySelector('svg.hg-room');
   if(!room)return;
@@ -1044,6 +1045,7 @@ async function openItem(id){
   ${cornerWheelHTML(l)}
   </div>
   <p id="liveStatus" class="small">${l.seller_live?'Seller is live — connecting to live video…':'Seller is not live yet. When they go live, their camera shows here.'}</p>
+  ${isSellerRoom&&!l.seller_live?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="goLive('${l.id}')">▶ Go Live — Turn Camera On</button>`:''}
   <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <button class="btn ghost" id="flipCamBtn" style="display:none" onclick="flipCamera()">🔄 Flip camera — front / back</button>
   <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
@@ -1054,7 +1056,6 @@ async function openItem(id){
   ${l.is_random&&isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:10px;margin-top:10px"><h3 style="margin-top:0">🎲 What is this Random Item?</h3>${l.revealed_item?`<p><b>Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}<p class="small">Type what you're holding up live, so buyers know what they're bidding on — no scrolling up. This is saved on the receipt.</p><label>What it is <input id="revealedInput" placeholder="e.g. Invicta Lupah watch" value="${escHtml(l.revealed_item||'')}"></label><label>Condition <select id="revealedCond"><option value="">— Pick a condition —</option>${['New','Used – Working','Used – Working Project','Used – Not Working / Project / For Parts'].map(c=>`<option${l.condition===c?' selected':''}>${c}</option>`).join('')}</select></label><button class="btn" onclick="revealItem('${l.id}')">Save what it is</button></div>`:''}
   </div>
   ${pmSection(l,pms)}
-  <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
   <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store — fixed-price items</button>
   <p><button class="btn ghost" onclick="report('${l.id}')">Report this listing</button> <button class="btn ghost" onclick="score('${escJs(l.seller)}')">Seller Scorecard</button>${ownerPw()?` <button class="btn ghost" onclick="confirmBad('${l.id}')">Confirm bad listing — fake / stolen / banned (owner)</button>`:''}</p>
   <div id="itemMsg"></div></div>`;
@@ -1074,6 +1075,13 @@ async function openItem(id){
     startViewer(id);
   }
   refreshKeepTrack(l.seller);
+  // Opening an item should land you right in the room — not at the bottom
+  // of the page (Kevin, 2026-11-21: it went to the bottom of the Rules and
+  // he had to scroll up). The browser keeps the scroll position from the
+  // main page, which is often at the bottom. Only scroll when a NEW item is
+  // opened; re-renders of the same item (bid, chat, timer) must not move
+  // the page.
+  if(id!==lastOpenedItemId){lastOpenedItemId=id;const rb=document.getElementById('liveRoomBox');if(rb)rb.scrollIntoView({behavior:'auto',block:'start'});}
 }
 async function bid(id,add){if(needSignIn())return;const l=await j('/api/listings/'+id);const r=await j('/api/listings/'+id+'/bid',{amount:l.current_bid+add});alert(r.ok?`Bid placed: $${r.currentBid} (total $${r.total})`:'Error: '+r.error);openItem(id);}
 // Custom bid is its own button, separate from the clock (Kevin, 2026-11-20):
@@ -1190,10 +1198,12 @@ async function goLive(id){
   startSellerPoll(id);
   startPresence(id);
   // When you go live, the screen should just show the room — no scrolling
-  // to find it (Kevin, 2026-11-21). The Go Live button is at the bottom of
-  // the page, so bring the Live room into view.
-  const rb=document.getElementById('liveRoomBox'); if(rb)rb.scrollIntoView({behavior:'smooth',block:'start'});
-  alert('You are LIVE NOW — buyers can see your camera.');
+  // to find it (Kevin, 2026-11-21). The Go Live button is right under the
+  // video in the room, so the camera comes on where you are looking. The
+  // scroll is instant (not smooth) and there is no pop-up alert — a pop-up
+  // blocks the scroll and hides the camera, so the status line above is
+  // the only confirmation. The camera is already on in the video above.
+  const rb=document.getElementById('liveRoomBox'); if(rb)rb.scrollIntoView({behavior:'auto',block:'start'});
 }
 // Flip the camera while live (Kevin, 2026-11-20): front (face) or back
 // (item). Swaps the video track in the local preview AND in every viewer
