@@ -1439,10 +1439,33 @@ app.post('/api/listings/:id/start', async (req, res) => {
   if (l.type !== 'auction' && l.type !== 'wheel') return res.json({ ok: false, error: 'Store items have no timer — they are live to buy right away' });
   if (l.status === 'live') return res.json({ ok: false, error: 'this auction is already running' });
   if (l.status !== 'queued') return res.json({ ok: false, error: 'this auction already ended — use Rerun to run it again' });
+  // Start settings (Kevin, 2026-11-20): when the room switches to the next
+  // item, the seller sets what to start it at right there — starting bid
+  // ($1 or $100 or anything), how long the timer runs, and Regular or
+  // Sudden Death — before tapping Start. These override what was set when
+  // the item was listed, only for this run. Validated first, so a bad value
+  // gets a clear error even when another item is still running.
+  let startPrice = Number(l.start_price || l.current_bid || 0);
+  let timerSeconds = Number(l.timer_seconds || 30);
+  let mode = l.mode || 'Sudden Death';
+  if (req.body && req.body.startPrice !== undefined && req.body.startPrice !== '') {
+    const p = Number(req.body.startPrice);
+    if (!Number.isFinite(p) || p < 0 || p > 1000000) return res.json({ ok: false, error: 'starting bid must be $0 to $1,000,000' });
+    startPrice = p;
+  }
+  if (req.body && req.body.timerSeconds !== undefined && req.body.timerSeconds !== '') {
+    const t = Number(req.body.timerSeconds);
+    if (!Number.isFinite(t) || t < 5 || t > 3600) return res.json({ ok: false, error: 'timer must be 5 seconds to 60 minutes' });
+    timerSeconds = Math.round(t);
+  }
+  if (req.body && req.body.mode) {
+    if (req.body.mode !== 'Regular' && req.body.mode !== 'Sudden Death') return res.json({ ok: false, error: 'pick Regular or Sudden Death' });
+    mode = req.body.mode;
+  }
   const running = await queryOne("SELECT id FROM listings WHERE seller=$1 AND status='live' AND type IN ('auction','wheel') AND id<>$2 LIMIT 1", [l.seller, l.id]);
   if (running) return res.json({ ok: false, error: 'finish the current item first — only one auction runs at a time' });
-  const created = new Date(); const ends = new Date(created.getTime() + (l.timer_seconds || 30) * 1000);
-  await query('UPDATE listings SET status=$1, created_at=$2, ends_at=$3 WHERE id=$4', ['live', created.toISOString(), ends.toISOString(), l.id]);
+  const created = new Date(); const ends = new Date(created.getTime() + timerSeconds * 1000);
+  await query('UPDATE listings SET status=$1, created_at=$2, ends_at=$3, start_price=$4, current_bid=$5, timer_seconds=$6, mode=$7 WHERE id=$8', ['live', created.toISOString(), ends.toISOString(), startPrice, startPrice, timerSeconds, mode, l.id]);
   res.json({ ok: true, endsAt: ends.toISOString(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // Next queued item for the auto-advance (Kevin, 2026-11-20): when the
