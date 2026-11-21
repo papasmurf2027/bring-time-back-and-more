@@ -228,6 +228,13 @@ async function showReceipt(id){
     <button class="btn" onclick="changePhoto()">Change picture</button>
     ${u.photo?`<button class="btn ghost" onclick="removePhoto()">Remove picture</button>`:''}
     <span id="photoMsg" class="small"></span></p>
+    <h3>Payment method</h3>
+    <p class="small">Set your payment method once here — the room never asks for it. When you win an auction or buy from the Store, it uses this saved method. ${u.paymentMethod?`Saved: <b>${escHtml(u.paymentMethod)}</b>${u.hasPaymentDetail?' — detail saved':''}.`:''}</p>
+    <p class="small"><b>TEST MODE — do not type a real card number here. No real payment is taken.</b> Type any test detail to pass, or type 'declined' to test a failed payment.</p>
+    <label>Method <select id="payMethod"><option value="">Pick one</option>${['card','PayPal','Apple Pay','Google Pay','Cash App','Venmo','bank'].map(m=>`<option value="${m}"${u.paymentMethod===m?' selected':''}>${m}</option>`).join('')}</select></label>
+    <label>Detail <input id="payDetail" placeholder="Test detail only — never a real card number"></label>
+    <button class="btn" onclick="savePayment()">Save payment method</button>
+    <span id="payMsg" class="small"></span>
     ${u.role==='buyer'?`<p><b>You signed up as a buyer, so you can't list yet.</b> <button class="btn" onclick="switchToSeller()">I want to sell too</button></p>`:''}
     <p><b>Real name and shipping address:</b> ${u.shippingAddress?escHtml(u.shippingAddress):'— not set yet. Add it in Your account below.'}</p>
     <h3>What I bought (${act.bought.length})</h3>
@@ -511,6 +518,20 @@ async function removePhoto(){
   if(m)m.textContent='Picture removed.';
   renderAuth(); loadProfile(); load();
 }
+// Payment method saved in the profile (Kevin, 2026-11-20): set it once
+// here, and the room never asks for it — Buy Now and Pay now use this.
+async function savePayment(){
+  const m=document.getElementById('payMsg'); if(m)m.textContent='';
+  const method=document.getElementById('payMethod').value;
+  const detail=document.getElementById('payDetail').value.trim();
+  if(!method){if(m)m.textContent='Pick a payment method first.';return;}
+  if(!detail){if(m)m.textContent='Type your payment detail first.';return;}
+  const r=await j('/api/auth/payment',{method,detail});
+  if(!r.ok){if(m)m.textContent='Error: '+(r.error||'could not save it');return;}
+  currentUser=r.user; try{localStorage.setItem('btb_user',JSON.stringify(r.user));}catch(e){}
+  if(m)m.textContent='Payment method saved — the room will use this from now on.';
+  renderAuth(); loadProfile();
+}
 function timerSecondsValue(){const s=document.getElementById('sTimer');if(!s)return 30;if(s.value==='custom'){const c=document.getElementById('sTimerCustom');const n=c?Number(c.value):0;return n>=5&&n<=3600?n:30;}return Number(s.value)||30;}
 function openRulesModal(){var b=document.getElementById('rulesModalBody');if(b&&!b.hasChildNodes()){var s=document.getElementById('rulesSec');if(s){var c=s.querySelector('ol');if(c)b.appendChild(c.cloneNode(true));}}document.getElementById('rulesModal').style.display='block';}
 function closeRulesModal(){document.getElementById('rulesModal').style.display='none';}
@@ -559,6 +580,7 @@ async function revealItem(id){
 // STUN only (stun.l.google.com) — no TURN server, so a few strict networks may fail.
 let liveListingId=null, liveRole=null, liveViewerId=null, liveStream=null, liveRemoteStream=null;
 let livePCs={}, livePoll=null, liveSince=null, liveSeen=new Set();
+let liveFacingMode='environment'; // back camera first (best for showing items); flip swaps to front
 function liveVideoEl(){return document.getElementById('liveVideo');}
 function liveStatusEl(){return document.getElementById('liveStatus');}
 function setLiveStatus(t){const e=liveStatusEl();if(e)e.textContent=t;}
@@ -574,6 +596,9 @@ function stopLiveFull(){
   livePCs={};
   if(liveStream){liveStream.getTracks().forEach(t=>t.stop());liveStream=null;}
   liveRemoteStream=null; liveListingId=null; liveRole=null; liveViewerId=null; liveSince=null; liveSeen=new Set();
+  liveFacingMode='environment';
+  const f=document.getElementById('flipCamBtn'); if(f)f.style.display='none';
+  const b=document.getElementById('endLiveBtn'); if(b)b.style.display='none';
 }
 async function pollSignals(id){
   let rows=[]; try{rows=await j('/api/listings/'+id+'/signal?since='+encodeURIComponent(liveSince||new Date(0).toISOString()));}catch(e){return;}
@@ -858,12 +883,11 @@ async function openItem(id){
   <p class="small">My Top Limit: set a max and the system bids the smallest step for you.</p>
   <label>My Top Limit $ <input id="tlAmt" type="number"></label><button class="btn ghost" onclick="setTop('${l.id}')">Set My Top Limit</button>`
   :`<p>Store price $${l.fixed_price} + $${l.shipping} shipping = $${l.fixed_price+l.shipping} total</p>
-  <label>Payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Apple Pay</option><option>Google Pay</option><option>Cash App</option><option>Venmo</option><option>bank</option></select></label>
-  <p class="small"><b>TEST MODE — do not type a real card number here. No real payment is taken.</b> Type any test detail to pass, or type 'declined' to test a failed payment.</p><label>Payment detail <input id="pDetail" placeholder="Test detail only — never a real card number"></label>
+  <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p>
   <button class="btn green" onclick="buyNow('${l.id}')">Buy Now — check my payment first</button>`}
   ${l.status==='ended'&&l.type!=='wheel'?`<p><b>Winner: ${escHtml(l.winner||'—')}</b> — ${l.payment_status==='validated'?'Payment went through — in escrow hold':l.payment_status==='declined'?'Payment declined — buyer needs to fix payment':'Waiting for winner payment'}</p>
   ${l.payment_status==='declined'?`<div style="background:#c62828;padding:14px;border-radius:10px"><h3>PAYMENT DIDN'T GO THROUGH! Don't lose this sale — pick one</h3><button class="btn" onclick="fixPay('${l.id}')">Fix Payment</button><button class="btn" onclick="rerun('${l.id}','${escJs(l.seller)}')">Rerun Auction</button></div>`:''}
-  <label>Winner payment method <select id="pMethod"><option>card</option><option>PayPal</option><option>Venmo</option></select></label><p class="small"><b>TEST MODE — do not type a real card number here. No real payment is taken.</b></p><label>Detail <input id="pDetail" placeholder="Test detail only — never a real card number"></label><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
+  <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p><button class="btn" onclick="payWinner('${l.id}')">Pay now</button>`:''}
   ${l.payout?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin-top:10px"><h3>💰 Seller payout — ${escHtml(l.payout.tier)} seller</h3>${l.payout.incorrectClaims?`<p><b>Incorrect return claims: ${l.payout.incorrectClaims}</b> — ${l.payout.banned?'selling privileges removed — this seller cannot sell on the site again.':l.payout.canSell?'suspension ended — selling is open again.':'selling privileges suspended until <b>'+new Date(l.payout.suspendedUntil).toLocaleString()+'</b> — listings are hidden and no new items can be listed until then.'}</p>`:''}${l.payout.badListingStrikes?`<p><b>Confirmed bad listings: ${l.payout.badListingStrikes}</b> — listings the owner confirmed were fake, stolen or banned items.</p>`:''}<p><b>${escHtml(l.seller)}</b> has <b>${l.payout.cleanSales} clean sale${l.payout.cleanSales===1?'':'s'}</b>${l.payout.score!==null?` • Seller Scorecard: ${l.payout.score}/5`:''}${l.payout.nextTier?` • <b>${l.payout.salesToNext} more clean sale${l.payout.salesToNext===1?'':'s'}</b> to ${escHtml(l.payout.nextTier)}`:' • top tier — fastest payout on everything'}.<br>Sale amount $${l.payout.amount} — payout <b>${l.payout.payoutLabel} after delivery</b>${l.payout.payoutAt?` — <b>payout date: ${new Date(l.payout.payoutAt).toLocaleString()}</b>`:' (payout date is set once delivery is confirmed)'}${l.escrow_status==='released'?` — <b>paid out</b>`:''}.</p><p class="small">The refund window runs until this payout date — legit reason + photo + video only, and no refund after that date. A payout never comes out while a refund is pending. Test mode: this is a tracked payout date, not a real bank transfer — no real payment processor is connected yet.</p></div>`:''}
   ${l.status==='sold'&&l.delivered_at&&l.payment_status==='validated'?(()=>{const dl=l.payout&&l.payout.payoutAt?new Date(l.payout.payoutAt):null;const closed=l.escrow_status==='released'||(dl&&new Date()>=dl);const rf=l.refund;if(rf&&rf.status!=='expired'){return `<div style="border:3px solid #c62828;border-radius:10px;padding:12px;margin-top:10px"><h3>↩️ Refund request — ${escHtml(rf.requester||'Buyer')} • ${escHtml(rf.reason||'')}</h3>${rf.status==='approved'?`<p><b>Refund given.</b> ${rf.return_choice==='want_back'?(rf.return_delivered_at?`The seller asked for the item back, the buyer shipped it back, and the return was scanned as DELIVERED on ${new Date(rf.return_delivered_at).toLocaleString()} — the refund released 48 hours after delivery (or after the seller confirmed), no seller tap needed for the delivery record.`:(rf.dispute_status==='correct'?'The owner reviewed the proof and the item sent back is the correct item — the claim was not upheld, so the refund was released.':'The seller asked for the item back, the buyer shipped it back, and the seller confirmed they received it — then the refund was released.')):'The seller agreed to refund without the item back — the buyer keeps the item.'} The refund came out of the seller's escrow money, not the owner's fees.</p>`:rf.status==='awaiting_return'?`<p><b>The seller wants the item back first — no refund until they receive it. Marking it delivered starts the 48-hour clock — the refund releases 48 hours after delivery if the seller does not confirm.</b><br>Return label: <b>${escHtml(rf.return_label_carrier||'')} ${escHtml(rf.return_label_tracking||'')}</b> (code ${escHtml(rf.return_label_code||'')}) — test label only, no real carrier connected yet.<br>Return label cost: <b>$${Number(rf.return_cost||0).toFixed(2)}</b> — paid by the seller, because the seller asked for the item back. Not the buyer's cost, not the owner's fees.<br>${rf.return_shipped_at?`Return shipped ${new Date(rf.return_shipped_at).toLocaleString()} — tracking ${escHtml(rf.return_tracking||rf.return_label_tracking||'')} — waiting for the seller to confirm they got it back.<br><b>If the seller does not confirm, the refund releases on its own ${rf.returnAutoReleaseAt?new Date(rf.returnAutoReleaseAt).toLocaleString():'48 hours after delivery'}</b> — the seller cannot stall it by not tapping. In test mode delivery is recorded from the tracking / mark-as-delivered step below — no live carrier feed yet; at go-live a real carrier delivery scan does this automatically.`:`The buyer has not shipped the return back yet. If it is not shipped back before the refund window closes (${dl?dl.toLocaleString():'the payout date'}), the refund expires and no refund is given.`}</p><label>Return tracking (the return label tracking is already filled in) <input id="retTrack" value="${escHtml(rf.return_label_tracking||'')}"></label><p class="small"><b>Before you mark it shipped:</b> send a video of the item going into the box + a picture of the label on the same box when sent out. The video proves what went in; the label picture proves that same box with that label is the one that was sent. The return cannot be marked shipped without both.</p><label>Video — item going into the box <input id="retVideo" type="file" accept="video/*" onchange="returnPick()"></label><label>Picture — the return label on the same box when sent out <input id="retPhoto" type="file" accept="image/*" onchange="returnPick()"></label><p class="small" id="retProofMsg">Attach BOTH the video and the label picture — the button stays locked until both are attached.</p><button class="btn" id="retBtn" disabled onclick="returnShipped('${rf.id}')">I shipped the return back</button>${rf.return_shipped_at?` <button class=\"btn ghost\" onclick=\"returnDelivered('${rf.id}')\">Mark return as delivered (carrier scan)</button><div style="border:2px dashed #c62828;border-radius:10px;padding:10px;margin-top:8px"><b>Seller — did the wrong item come back?</b><p class="small">If the wrong item, an empty box, or a different item arrived, tap "Wrong item sent back" and attach BOTH a photo AND a video of what actually arrived. That pauses the refund right away — the 48-hour auto-release stops and the owner decides. No photo + video, no flag. If the claim is not upheld after review, it counts against you: that sale is not a clean sale, you drop a tier, it is recorded on your Seller Scorecard, and selling privileges are suspended for 7 days after a first incorrect claim, 30 days after a second, and removed after a third.</p><label>Photo of what arrived <input id="dspPhoto" type="file" accept="image/*" onchange="disputePick()"></label><label>Video of what arrived <input id="dspVideo" type="file" accept="video/*" onchange="disputePick()"></label><p class="small" id="dspProofMsg">Attach BOTH a photo and a video — the button stays locked until both are attached.</p><button class="btn" id="dspBtn" disabled onclick="flagWrongItem('${rf.id}','${escJs(l.seller)}')">Wrong item sent back</button><p id="dspMsg" class="small"></p></div>`:''}<p id="retMsg" class="small"></p>`:rf.status==='disputed'?`<p><b>⚠️ Wrong-item dispute open— refund paused.</b><br>The seller says the wrong item came back — photo: ${escHtml(rf.dispute_photo_name||'—')} • video: ${escHtml(rf.dispute_video_name||'—')}. The 48-hour auto-release is stopped and no refund goes out while the owner decides. The owner compares three things: the buyer's video of the item going into the box + picture of the label on the same box when sent out, the seller's photo + video of what arrived, and the original receipt + video receipt.</p>`:`<p><b>The seller is deciding.</b> It is up to the seller: refund without the item back, or ask for the item back first — then no refund until they receive it. The refund window closes ${dl?dl.toLocaleString():'on the payout date'}.</p>`}</div>`;}return `<div style="border:3px solid #c62828;border-radius:10px;padding:12px;margin-top:10px"><h3>↩️ Ask for a refund</h3>${closed?`<p><b>Refund window closed.</b> Refunds close on the payout date${dl?` (${dl.toLocaleString()})`:''} — after the seller is paid out, no refund. Same rule as always: legit reason only, and a photo + video were required while the window was open.</p>`:`<p style="color:#c62828"><b>Refund window closes ${dl?dl.toLocaleString():'on the payout date'}</b> (${l.payout?l.payout.payoutLabel:''} after delivery) — legit reason only, and you must send BOTH a photo AND a video of the item, or no refund. After that date, no refund.</p><p class="small">It's up to the seller what happens next: they can refund without the item back, or ask for the item back first — then no refund until they receive it. If they ask for it back, a tracked return label is sent to you, paid for by the seller.</p><label>Legit reason <select id="rfReason" onchange="refundPick()"><option value="not as described">Not as described</option><option value="damaged in transit">Damaged in transit</option><option value="wrong item">Wrong item</option><option value="defective">Defective</option><option value="never arrived">Never arrived</option></select></label><p class="small">"Changed my mind" is not accepted — the form only offers legit reasons.</p>${l.no_change_of_mind?`<p><b>This sale is no cancellation — no refund for change of mind.</b> You bid knowing that — bidding is your responsibility. A refund is only for a legit reason (not as described, damaged, wrong item, defective, never arrived), with a photo and video, before the refund window closes.</p>`:''}<label>Photo of the item <input id="rfPhoto" type="file" accept="image/*" onchange="refundPick()"></label><label>Video of the item <input id="rfVideo" type="file" accept="video/*" onchange="refundPick()"></label><p class="small" id="rfProofMsg">Attach BOTH a photo and a video — the button stays locked until both are attached.</p><button class="btn" id="rfBtn" disabled onclick="submitRefund('${l.id}')">Ask for a refund</button><p id="rfMsg" class="small"></p>`}</div>`;})():''}
   ${l.receipt?`<p>Receipt ${escHtml(l.receipt.receipt_no)} — total $${l.receipt.total}${l.winner_address?` — Ship to (locked at win): <b>${escHtml(l.winner_address)}</b>`:''} — <a href="#" onclick="alert('Receipt — see the receipt number above');return false">Download receipt</a></p>${l.wheel_landed_item?`<p><b>You won: ${escHtml(l.wheel_landed_item)}</b> — the item the Time Wheel landed on. No extra prize, no extra charge.</p>`:''}${l.revealed_item?`<p><b>You won: ${escHtml(l.revealed_item)}</b> — revealed live on camera (Random Item: ${escHtml(l.title)}).</p>`:l.is_random&&l.status==='sold'?`<p class="small">🎲 Video receipt: Random Item — revealed live on camera, seller to confirm what it was.</p>`:''}`:''}
@@ -874,18 +898,21 @@ async function openItem(id){
   <p class="small">Scan this code with your phone — it opens this exact sale, so you ship the right item and don't box up the wrong order. This QR is a shipment record, not real ${carrierOf(l)} postage yet.</p>
   ${l.shipped_at?`<p><span class="badge green">Marked as shipped ${l.shipped_at}</span></p>`:`<button class="btn" onclick="markShipped('${l.id}')">Mark as shipped</button>`}
   <p id="shipMsg" class="small"></p></div>`:''}
-  <h3>Live video ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3>
+  <div style="border:2px solid #c9a227;border-radius:12px;padding:10px;margin-top:10px">
+  <h3 style="margin-top:0">🔴 Live room ${l.seller_live?'<span class="badge">LIVE NOW</span>':''}</h3>
   ${isSellerRoom&&l.seller_live?`<p id="watchingLine" style="color:#f5c542;font-weight:800;margin:6px 0">👥 ${l.watching||0} watching now</p>`:''}
-  <div style="position:relative;background:#000;border-radius:10px;min-height:200px">
-  <video id="liveVideo" playsinline autoplay style="width:100%;max-height:420px;background:#000;border-radius:10px;display:none"></video>
+  <div style="position:relative;background:#000;border-radius:10px;min-height:160px">
+  <video id="liveVideo" playsinline autoplay style="width:100%;max-height:240px;background:#000;border-radius:10px;display:none"></video>
   ${cornerWheelHTML(l)}
   </div>
-  <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
   <p id="liveStatus" class="small">${l.seller_live?'Seller is live — connecting to live video…':'Seller is not live yet. When they go live, their camera shows here.'}</p>
+  <button class="btn" id="unmuteBtn" style="display:none" onclick="const v=document.getElementById('liveVideo');v.muted=false;v.play();this.style.display='none'">Tap for sound — hear the seller</button>
+  <button class="btn ghost" id="flipCamBtn" style="display:none" onclick="flipCamera()">🔄 Flip camera — front / back</button>
   <button class="btn ghost" id="endLiveBtn" style="display:none" onclick="endLive('${l.id}')">End Live</button>
-  <h3>Chat room ${l.seller_live?'<span class="badge">🔴 LIVE NOW</span>':''}</h3><p class="small">Live video + live chat — type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
+  <h3 style="margin-bottom:4px">Chat</h3><p class="small">Type in chat what you want the seller to show you. No advertising other auction sites or marketplaces here — links to other sites are not allowed and will be blocked.</p>
   <div class="chat">${l.chats.map(c=>`<p><b>${escHtml(c.name)}${c.is_seller?' (seller)':''}:</b> ${escHtml(c.message)}</p>`).join('')}</div>
   <label>Message <input id="cMsg"></label><button class="btn" onclick="chat('${l.id}')">Post</button>
+  </div>
   ${pmSection(l,pms)}
   <button class="btn ghost" onclick="goLive('${l.id}')">Go Live — Turn Camera On (seller only)</button>
   <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store — fixed-price items</button>
@@ -897,6 +924,7 @@ async function openItem(id){
   if(wasLive&&liveRole==='seller'&&liveStream){
     const v=liveVideoEl(); if(v){v.srcObject=liveStream; v.style.display='block'; v.play().catch(()=>{});}
     const b=document.getElementById('endLiveBtn'); if(b)b.style.display='inline-block';
+    const f=document.getElementById('flipCamBtn'); if(f)f.style.display='inline-block';
     setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
     startSellerPoll(id);
   } else if(wasLive&&liveRole==='viewer'){
@@ -910,8 +938,8 @@ async function openItem(id){
 async function bid(id,add){if(needSignIn())return;const l=await j('/api/listings/'+id);const r=await j('/api/listings/'+id+'/bid',{amount:l.current_bid+add});alert(r.ok?`Bid placed: $${r.currentBid} (total $${r.total})`:'Error: '+r.error);openItem(id);}
 async function bidCustom(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/bid',{amount:Number(document.getElementById('bAmt').value)});alert(r.ok?`Bid placed: $${r.currentBid}`:'Error: '+r.error);openItem(id);}
 async function setTop(id){if(needSignIn())return;const r=await j('/api/top-limit',{listingId:id,maxAmount:Number(document.getElementById('tlAmt').value)});alert(r.ok?'My Top Limit set':'Error: '+r.error);}
-async function buyNow(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/buy-now',{method:document.getElementById('pMethod').value,detail:document.getElementById('pDetail').value});alert(r.ok?`Sale complete — $${r.total} in escrow. Receipt ${r.receiptNo}`:'Error: '+r.error);openItem(id);}
-async function payWinner(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/pay',{method:document.getElementById('pMethod').value,detail:document.getElementById('pDetail').value});alert(r.ok?(`Payment went through — $${r.total} in escrow`+(r.landedItem?` — the Time Wheel landed on: ${r.landedItem}`:'')):'Error: '+r.error);openItem(id);}
+async function buyNow(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/buy-now',{});alert(r.ok?`Sale complete — $${r.total} in escrow. Receipt ${r.receiptNo}`:'Error: '+r.error);openItem(id);}
+async function payWinner(id){if(needSignIn())return;const r=await j('/api/listings/'+id+'/pay',{});alert(r.ok?(`Payment went through — $${r.total} in escrow`+(r.landedItem?` — the Time Wheel landed on: ${r.landedItem}`:'')):'Error: '+r.error);openItem(id);}
 async function markShipped(id){if(needSignIn())return;const seller=authName();const r=await j('/api/listings/'+id+'/mark-shipped',{seller},sellerHeaders(seller));noteSellerToken(seller,r);const m=document.getElementById('shipMsg');if(m)m.textContent=r.ok?('Marked as shipped — tracking '+r.tracking):('Error: '+r.error);if(r.ok)openItem(id);}
 window._rfPhoto='';window._rfVideo='';
 function refundPick(){const rs=document.getElementById('rfReason');const neverArrived=rs&&rs.value==='never arrived';const ph=document.getElementById('rfPhoto');const vd=document.getElementById('rfVideo');window._rfPhoto=ph&&ph.files&&ph.files[0]?ph.files[0].name:'';window._rfVideo=vd&&vd.files&&vd.files[0]?vd.files[0].name:'';const b=document.getElementById('rfBtn');const m=document.getElementById('rfProofMsg');if(neverArrived){if(b)b.disabled=false;if(m)m.textContent='Never arrived: no photo or video is needed — you never received the item. The owner will review it (opens 7 days after the sale if never shipped, or 7 days after shipping with no delivery).';return;}if(b)b.disabled=!(window._rfPhoto&&window._rfVideo);if(m)m.textContent=(window._rfPhoto&&window._rfVideo)?'Photo + video attached — you can send the refund request.':'Attach BOTH a photo and a video — the button stays locked until both are attached.';}
@@ -967,9 +995,9 @@ async function goLive(id){
   // Try the back camera first (best for showing items), then fall back
   // to any camera — a strict back-camera request fails on some phones.
   let stream;
-  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true});}
+  try{stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'},audio:true}); liveFacingMode='environment';}
   catch(e1){
-    try{stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true});}
+    try{stream=await navigator.mediaDevices.getUserMedia({video:true,audio:true}); liveFacingMode='user';}
     catch(e2){alert('Camera / mic blocked — this site needs camera and microphone access to go live. Allow it for this site in your browser settings, then tap Go Live again.');return;}
   }
   const r=await j('/api/listings/'+id+'/go-live',{seller},sellerHeaders(seller));noteSellerToken(seller,r);
@@ -979,10 +1007,35 @@ async function goLive(id){
   liveRole='seller'; liveStream=stream; liveSince=new Date().toISOString(); liveSeen=new Set(); livePCs={};
   const v=liveVideoEl(); if(v){v.srcObject=stream; v.muted=true; v.style.display='block'; v.play().catch(()=>{});}
   const b=document.getElementById('endLiveBtn'); if(b)b.style.display='inline-block';
+  const f=document.getElementById('flipCamBtn'); if(f)f.style.display='inline-block';
   setLiveStatus('🔴 LIVE — buyers can see your camera now. Watch the chat for what they want to see.');
   startSellerPoll(id);
   startPresence(id);
   alert('You are LIVE NOW — buyers can see your camera.');
+}
+// Flip the camera while live (Kevin, 2026-11-20): front (face) or back
+// (item). Swaps the video track in the local preview AND in every viewer
+// connection, so the room sees the new camera without dropping the show.
+async function flipCamera(){
+  if(liveRole!=='seller'||!liveStream)return;
+  const next=liveFacingMode==='environment'?'user':'environment';
+  let ns;
+  try{ns=await navigator.mediaDevices.getUserMedia({video:{facingMode:next},audio:false});}
+  catch(e){try{ns=await navigator.mediaDevices.getUserMedia({video:true,audio:false});}catch(e2){alert('Could not switch camera — your phone may only have one camera.');return;}}
+  const newVideo=ns.getVideoTracks()[0];
+  if(!newVideo){ns.getTracks().forEach(t=>t.stop());return;}
+  const oldVideo=liveStream.getVideoTracks()[0];
+  const oldAudio=liveStream.getAudioTracks()[0];
+  const combined=new MediaStream([newVideo].concat(oldAudio?[oldAudio]:[]));
+  const v=liveVideoEl(); if(v){v.srcObject=combined; v.style.display='block'; v.play().catch(()=>{});}
+  for(const k of Object.keys(livePCs)){
+    const pc=livePCs[k];
+    const sender=pc.getSenders().find(s=>s.track&&s.track.kind==='video');
+    if(sender){try{await sender.replaceTrack(newVideo);}catch(e){}}
+  }
+  if(oldVideo)oldVideo.stop();
+  liveStream=combined; liveFacingMode=next;
+  setLiveStatus('🔴 LIVE — camera flipped to '+(next==='user'?'front (face)':'back (item)')+' camera. Buyers can see your camera now.');
 }
 async function endLive(id){
   if(liveRole==='viewer')sendSignal(id,liveViewerId,'seller','leave',{});
