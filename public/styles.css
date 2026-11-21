@@ -52,3 +52,33 @@ h2{color:var(--gold)}
 .hg-mini{width:64px;height:auto}
 .hg-mini-wrap{margin:6px 0}
 .hg-state{color:var(--muted);font-size:14px;text-align:center;margin:4px 0 0}
+
+/* Mobile version (phone) vs PC version (computer) — Kevin, 2026-11-21:
+   on a phone it should show up like a mobile version, on a computer like
+   a PC version. The viewport meta tag already makes the phone render at
+   device width; these rules make the phone layout truly mobile-first and
+   let the computer layout use the wider screen. */
+@media(max-width:699px){
+  header{padding:8px 10px;gap:8px}
+  header img{height:48px;width:48px;border-width:2px}
+  h1{font-size:18px}
+  .tag{font-size:12px}
+  main{padding:12px 10px 32px}
+  .hero{padding:18px 8px 4px}
+  .hero h2{font-size:32px}
+  .hero p{font-size:15px}
+  /* The Live room is the phone's main screen: video big, chat tall,
+     buttons full-width and easy to hit with a thumb. */
+  #liveVideo{max-height:340px !important}
+  .chat{max-height:300px}
+  .btn{padding:16px 20px;font-size:19px}
+  .btn.green{width:100%;margin:6px 0}
+  .card{padding:14px;margin:10px 0}
+  input,select,textarea{padding:12px;font-size:16px}
+}
+@media(min-width:1000px){
+  main{max-width:1200px}
+  .grid{grid-template-columns:1fr 1fr 1fr}
+  #liveVideo{max-height:420px !important}
+  .chat{max-height:320px}
+}
