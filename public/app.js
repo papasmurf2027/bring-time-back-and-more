@@ -252,8 +252,12 @@ async function load(){
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
   // Giveaways (wheel) live only in the seller's room, never as cards on the
   // main page — the main grid shows auctions and Store items only.
+  // Main grid shows only items you can still bid on or buy — queued (waiting
+  // to start) and live. Ended and sold items are done; they live on My
+  // Profile (What I bought / What I sold), not in the browse list. Otherwise
+  // every Random Item ever tried piles up as a list of cards (Kevin, 2026-11-20).
   // A seller's Store (curSeller) shows only that seller's fixed-price items.
-  let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
+  let rows=o.listings.filter(l=>l.type!=='wheel'&&(!curType||l.type===curType)&&(l.status==='queued'||l.status==='live')); if(curCat!=='All')rows=rows.filter(l=>l.category===curCat); if(curSeller)rows=rows.filter(l=>l.seller===curSeller);
   document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
