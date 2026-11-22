@@ -313,11 +313,21 @@ async function load(){
     if(!(l.is_random&&l.status==='queued'))return true;
     const base=l.title.replace(/\s+\d+$/,'');
     const key=[l.seller,base,l.category,l.start_price,l.timer_seconds,l.mode,l.package_size,l.condition].join('|');
-    if(!batchSeen[key])batchSeen[key]={count:0,first:l};
-    batchSeen[key].count++;
+    if(!batchSeen[key])batchSeen[key]={count:0,first:l,items:[]};
+    batchSeen[key].count++; batchSeen[key].items.push(l);
     if(batchSeen[key].first===l){l.randomBatchCount=batchSeen[key].count;return true;}
     batchSeen[key].first.randomBatchCount=batchSeen[key].count;
     return false;
+  });
+  // The batch card stands for the FIRST item to run (the oldest — Random
+  // Item 1), not the newest, so Open lands on item 1 (Kevin, 2026-11-22).
+  rows=rows.map(l=>{
+    if(!(l.is_random&&l.status==='queued'&&l.randomBatchCount))return l;
+    const base=l.title.replace(/\s+\d+$/,'');
+    const key=[l.seller,base,l.category,l.start_price,l.timer_seconds,l.mode,l.package_size,l.condition].join('|');
+    const b=batchSeen[key]; if(!b||b.items.length<2)return l;
+    const first=b.items.slice().sort((x,y)=>String(x.created_at).localeCompare(String(y.created_at)))[0];
+    first.randomBatchCount=b.count; return first;
   });
   document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${(l.authenticity==='Replica'||l.authenticity==='Unbranded')?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
@@ -326,8 +336,8 @@ async function load(){
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
-  <p class="small">Status: ${escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
-  <button class="btn" onclick="openItem('${l.id}')">Open</button> <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
+  <p class="small">${l.status==='queued'?'':'Status: '+escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
+  ${l.status==='queued'&&l.type!=='buy_now'&&currentUser&&l.seller===authName()?`<button class="btn green" onclick="startShow('${l.id}')">▶ Go live with this</button>`:`<button class="btn" onclick="openItem('${l.id}')">Open</button>`} <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
   const s=await j('/api/coming-up');
   let savedShows=[]; if(currentUser){try{const sv=await j('/api/saved-shows'); if(Array.isArray(sv))savedShows=sv;}catch(e){}}
   const saved=new Set(savedShows.map(x=>x.id));
@@ -1247,6 +1257,9 @@ async function sendPrivateMessage(id,to,inputId){
   if(!r.ok){alert('Error: '+r.error);return;}
   openItem(id);
 }
+// The seller's own waiting card: one tap takes them into the room and
+// turns the camera on (Kevin, 2026-11-22).
+async function startShow(id){await openItem(id); if(!(liveRole==='seller'&&liveStream))await goLive(id);}
 async function goLive(id){
   if(needSignIn())return;
   const seller=authName();
