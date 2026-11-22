@@ -58,10 +58,25 @@ function renderAuth(){
   // Human check at first sign-up only (Kevin, 2026-11-20): the "I'm a
   // real person" box only shows when you're not signed in. Once you're
   // signed up you never see it again — sign-in never asks for it.
-  const hr=document.getElementById('humanCheckRow'); if(hr)hr.style.display=currentUser?'none':'';
+  // Sign in and Sign up are two separate screens (Kevin, 2026-11-22: "why
+  // do I still have to read rules every time"). Coming back = Sign in:
+  // just email + password, no Rules, no real-person box. Brand new = Sign
+  // up: the full form with the Rules, once. Signed in = only the
+  // signed-in buttons. Nobody sees a button that isn't for them.
+  const _mode=currentUser?'signed':authMode();
+  const _showAu=(cls,on)=>document.querySelectorAll('#authSec .'+cls).forEach(e=>{e.style.display=on?'':'none';});
+  _showAu('auOut',_mode!=='signed'); _showAu('auIn',_mode==='in'); _showAu('auUp',_mode==='up');
+  _showAu('auAddr',_mode!=='in'); _showAu('auSigned',_mode==='signed');
+  const hr=document.getElementById('humanCheckRow'); if(hr)hr.style.display=_mode==='up'?'block':'none';
   const hc=document.getElementById('aHuman'); if(hc&&!currentUser)hc.checked=false;
   if(!currentUser){const ps=document.getElementById('profileSec'); if(ps)ps.style.display='none';}
 }
+// Which screen a signed-out person sees: someone who signed in on this
+// phone before gets Sign in, a brand-new person gets Sign up. Either one
+// can switch with one tap.
+let _authMode=null;
+function authMode(){if(_authMode)return _authMode;let seen=false;try{seen=!!localStorage.getItem('btb_last_email');}catch(e){}return seen?'in':'up';}
+function setAuthMode(m){_authMode=m;authMsg('');renderAuth();}
 function loadSession(){try{const u=localStorage.getItem('btb_user');if(u)currentUser=JSON.parse(u);}catch(e){}}
 async function authMe(){
   if(!sessionToken()){loadSession();renderAuth();return;}
@@ -681,7 +696,7 @@ async function createListing(){
   // has one, so nobody can buy it outright before the auction is done.
   const _isStore=document.getElementById('sType').value==='buy_now';
   const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:_isStore?document.getElementById('sFixed').value:null,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
-  const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok)load();
+  const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok){await load(); if(!_isStore&&r.id)openItem(r.id);}
 }
 // Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
 // no picture needed — the seller shows each one live on camera. Uses the
@@ -702,7 +717,10 @@ async function createRandomItems(){
   const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sRandomCat').value,startPrice:document.getElementById('sRandomStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sRandomAuth').value,condition:document.getElementById('sRandomCond').value,timerSeconds:randomTimerSecondsValue(),mode:document.getElementById('sRandomMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
-  if(r.ok)load();
+  // Fill it out once and you are in the room (Kevin, 2026-11-22): no
+  // hunting for the card afterwards. It opens the first one's room, ready
+  // for Go Live and Start auction.
+  if(r.ok){await load(); if(r.ids&&r.ids[0])openItem(r.ids[0]);}
 }
 // Seller says what the winner actually won on a Random Item — the item they
 // held up live on camera. Saved on the listing, then shown on the receipt,
