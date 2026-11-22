@@ -319,10 +319,10 @@ async function load(){
     batchSeen[key].first.randomBatchCount=batchSeen[key].count;
     return false;
   });
-  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${l.authenticity!=='Authentic'?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
+  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${(l.authenticity==='Replica'||l.authenticity==='Unbranded')?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   ${l.is_random&&l.randomBatchCount>1?`<p class="small"><b>🎲 ${l.randomBatchCount} random items in this batch</b> — tap Open to join the room, they run one after another.</p>`:''}
-  <p>${escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
+  <p>${l.is_random?'Random':escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
   ${noComNote(l)}
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
@@ -696,7 +696,7 @@ async function createListing(){
   // has one, so nobody can buy it outright before the auction is done.
   const _isStore=document.getElementById('sType').value==='buy_now';
   const b={seller:document.getElementById('sSeller').value,title:document.getElementById('sTitle').value,description:document.getElementById('sDesc').value,category:document.getElementById('sCat').value,type:document.getElementById('sType').value,startPrice:document.getElementById('sStart').value,fixedPrice:_isStore?document.getElementById('sFixed').value:null,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sAuth').value,condition:document.getElementById('sCond').value,timerSeconds:timerSecondsValue(),mode:document.getElementById('sMode').value,shippingInsured:document.getElementById('sInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked,imageUrl:window._photoData||'',wheelItems};
-  const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok){await load(); if(!_isStore&&r.id)openItem(r.id);}
+  const r=await j('/api/listings',b); noteSellerToken(b.seller,r); document.getElementById('sellMsg').textContent=r.ok?'Listed!':('Error: '+r.error); if(r.ok){await load(); if(!_isStore&&r.id){await openItem(r.id); if(!(liveRole==='seller'&&liveStream))await goLive(r.id);}}
 }
 // Random Items: one tap creates N numbered auctions (Random Item 1, 2, 3…),
 // no picture needed — the seller shows each one live on camera. Uses the
@@ -714,13 +714,13 @@ async function createRandomItems(){
   // "Say it live in chat" (the Random way) — the seller can pick a real
   // condition instead. Seller name still comes from the account.
   const size=document.getElementById('sRandomSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:document.getElementById('sRandomCat').value,startPrice:document.getElementById('sRandomStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,authenticity:document.getElementById('sRandomAuth').value,condition:document.getElementById('sRandomCond').value,timerSeconds:randomTimerSecondsValue(),mode:document.getElementById('sRandomMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:'Other',startPrice:document.getElementById('sRandomStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,condition:document.getElementById('sRandomCond').value,timerSeconds:randomTimerSecondsValue(),mode:document.getElementById('sRandomMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
   // Fill it out once and you are in the room (Kevin, 2026-11-22): no
   // hunting for the card afterwards. It opens the first one's room, ready
   // for Go Live and Start auction.
-  if(r.ok){await load(); if(r.ids&&r.ids[0])openItem(r.ids[0]);}
+  if(r.ok){await load(); if(r.ids&&r.ids[0]){await openItem(r.ids[0]); if(!(liveRole==='seller'&&liveStream))await goLive(r.ids[0]);}}
 }
 // Seller says what the winner actually won on a Random Item — the item they
 // held up live on camera. Saved on the listing, then shown on the receipt,
@@ -1090,7 +1090,7 @@ async function openItem(id){
   // opening a different seller's room never shows a stale winner.
   const winnerLine=(lastWinner&&lastWinner.name&&l.status==='queued'&&l.seller===lastWinner.seller)?`<p style="background:#c9a227;color:#081426;border-radius:10px;padding:10px;font-weight:800;text-align:center">🏆 ${escHtml(lastWinner.name)} won${lastWinner.amount!=null&&lastWinner.amount>0?` it for $${lastWinner.amount}`:''}!</p>`:'';
   const el=document.getElementById('detail'); el.scrollIntoView();
-  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${escHtml(l.category)} • ${escHtml(l.authenticity)} • <b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
+  el.innerHTML=`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h2>${escHtml(l.title)}</h2>${noComBadge(l)}${noComNote(l)}${l.is_random?`<p><span class="badge gold">🎲 RANDOM ITEM — no picture, seller shows it live on camera</span></p>`:''}<p>${escHtml(l.description||'')} • ${l.is_random?'':escHtml(l.category)+' • '}${l.is_random&&l.authenticity!=='Replica'&&l.authenticity!=='Unbranded'?'':escHtml(l.authenticity)+' • '}<b>Condition: ${escHtml(conditionOf(l))}</b> • Seller: ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}</p><span id="keepTrackBox"></span>
   ${l.is_random&&l.revealed_item?`<p><b>🎲 Revealed live on camera: ${escHtml(l.revealed_item)}</b>${l.winner?` — that is what ${escHtml(l.winner)} won.`:''}</p>`:''}
   ${l.type==='wheel'?wheelPanel(l):''}
   ${l.type==='wheel'?(l.status==='queued'
@@ -1419,7 +1419,7 @@ function copyLiveEmails(){
 }
 async function setTax(){const r=await oj('/api/settings/tax',{percent:Number(document.getElementById('taxPct').value)});alert(r.ok?'Tax % set to '+r.taxPercent:'Error: '+r.error);loadDash();}
 document.getElementById('sCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
-document.getElementById('sRandomCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
+if(document.getElementById('sRandomCat'))document.getElementById('sRandomCat').innerHTML=cats.slice(1).map(c=>`<option>${c}</option>`).join('');
 load(); loadSession(); renderAuth(); authMe(); toggleFixedPrice(); setInterval(load,15000);
 // Owner dashboard is NOT listed on the site — only the owner opens it, by adding ?owner to the site address, then entering the owner password. Buyers and sellers never see it.
 (function(){const q=new URLSearchParams(location.search);if(q.has('owner'))setTimeout(()=>show('dash'),600);})();
