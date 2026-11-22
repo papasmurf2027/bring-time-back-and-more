@@ -1250,11 +1250,14 @@ app.post('/api/listings', async (req, res) => {
     const base = String(b.randomBase || b.title || 'Random Item').trim().replace(/\s+\d+$/, '').slice(0, 100) || 'Random Item';
     const badBase = bannedHit(base);
     if (badBase) return res.json({ ok: false, error: 'banned item: ' + badBase });
-    const desc = 'Random item — no picture. The seller holds it up live on camera. What you win is what they show live.' + (auth !== 'Authentic' ? ' (' + auth + ')' : '');
+    // Random Items (Kevin, 2026-11-22): no authenticity picker — the seller
+    // says what it is live in the chat, so nothing is claimed up front.
+    const rAuth = ['Authentic', 'Replica', 'Unbranded'].includes(b.authenticity) ? b.authenticity : 'Say it live in chat';
+    const desc = 'Random item — no picture. The seller holds it up live on camera. What you win is what they show live.' + ((rAuth === 'Replica' || rAuth === 'Unbranded') ? ' (' + rAuth + ')' : '');
     const ids = [], titles = [];
     for (let i = 1; i <= count; i++) {
       const title = base + ' ' + i;
-      const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, auth, timer, true, cond);
+      const id = await insertListing(b, title, desc, 'auction', [], shipAmt, sizePrice, rAuth, timer, true, cond);
       ids.push(id); titles.push(title);
     }
     const _st = await ensureSellerToken(b.seller, b.sellerUserId);
