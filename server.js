@@ -1511,10 +1511,14 @@ app.post('/api/listings/:id/start', async (req, res) => {
     if (req.body.mode !== 'Regular' && req.body.mode !== 'Sudden Death') return res.json({ ok: false, error: 'pick Regular or Sudden Death' });
     mode = req.body.mode;
   }
+  // No cancellation can be picked in the room's start options too (Kevin,
+  // 2026-11-22). Set before the item starts, so buyers see it before bidding.
+  let noCom = Number(l.no_change_of_mind) ? 1 : 0;
+  if (req.body && typeof req.body.noChangeOfMind === 'boolean') noCom = req.body.noChangeOfMind ? 1 : 0;
   const running = await queryOne("SELECT id FROM listings WHERE seller=$1 AND status='live' AND type IN ('auction','wheel') AND id<>$2 LIMIT 1", [l.seller, l.id]);
   if (running) return res.json({ ok: false, error: 'finish the current item first — only one auction runs at a time' });
   const created = new Date(); const ends = new Date(created.getTime() + timerSeconds * 1000);
-  await query('UPDATE listings SET status=$1, created_at=$2, ends_at=$3, start_price=$4, current_bid=$5, timer_seconds=$6, mode=$7 WHERE id=$8', ['live', created.toISOString(), ends.toISOString(), startPrice, startPrice, timerSeconds, mode, l.id]);
+  await query('UPDATE listings SET status=$1, created_at=$2, ends_at=$3, start_price=$4, current_bid=$5, timer_seconds=$6, mode=$7, no_change_of_mind=$8 WHERE id=$9', ['live', created.toISOString(), ends.toISOString(), startPrice, startPrice, timerSeconds, mode, noCom, l.id]);
   res.json({ ok: true, endsAt: ends.toISOString(), ...(_tok.newToken ? { sellerToken: _tok.newToken } : {}) });
 });
 // Next queued item for the auto-advance (Kevin, 2026-11-20): when the
