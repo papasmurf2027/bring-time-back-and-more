@@ -688,6 +688,10 @@ function pickStart(group,value,el){
     const h=document.getElementById('startMode');
     if(h)h.value=value;
   }
+  if(group==='nocom'){
+    const h=document.getElementById('startNoCom');
+    if(h)h.value=value;
+  }
   const wrap=el.parentElement;
   if(wrap)wrap.querySelectorAll('.tile').forEach(t=>t.classList.remove('active'));
   el.classList.add('active');
@@ -723,8 +727,12 @@ async function createRandomItems(){
   // #sCond/#sCat/#sStart/#sTimer/#sMode/#sAuth. Condition defaults to
   // "Say it live in chat" (the Random way) — the seller can pick a real
   // condition instead. Seller name still comes from the account.
+  // Random is all in one place (Kevin, 2026-11-22): start bid, time, mode
+  // and no cancellation are set in the room's start options, not here too.
+  // New items begin with what was used last.
+  const _rs=lastStartFor({current_bid:10,timer_seconds:30,mode:'Regular',is_random:1});
   const size=document.getElementById('sRandomSize').value;
-  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:'Other',startPrice:document.getElementById('sRandomStart').value,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,condition:document.getElementById('sRandomCond').value,timerSeconds:randomTimerSecondsValue(),mode:document.getElementById('sRandomMode').value,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:document.getElementById('sNoCom').checked};
+  const b={isRandom:true,randomBase:document.getElementById('sRandomBase').value,randomCount:Number(document.getElementById('sRandomCount').value),seller:document.getElementById('sSeller').value,category:'Other',startPrice:_rs.startPrice,packageSize:size,shipping:(SHIP_SIZES[size]||{}).price,condition:document.getElementById('sRandomCond').value,timerSeconds:_rs.timerSeconds,mode:_rs.mode,shippingInsured:document.getElementById('sRandomInsured').checked,noChangeOfMind:_rs.noCom};
   const r=await j('/api/listings',b); noteSellerToken(b.seller,r);
   document.getElementById('randomMsg').textContent=r.ok?`Created ${r.count} random items: ${escHtml(r.titles.join(', '))} — no picture, show each one live on camera.` : ('Error: '+r.error);
   // Fill it out once and you are in the room (Kevin, 2026-11-22): no
@@ -1041,12 +1049,13 @@ function lastStartFor(l){
   const sp=(s&&typeof s.startPrice==='number')?s.startPrice:(l.current_bid||l.start_price||0);
   const ts=(s&&typeof s.timerSeconds==='number')?s.timerSeconds:(l.timer_seconds||30);
   const md=(s&&s.mode)?s.mode:(l.mode||'Sudden Death');
-  return {startPrice:sp,timerSeconds:ts,mode:md};
+  const nc=(l.is_random&&s&&typeof s.noCom==='boolean')?s.noCom:!!Number(l.no_change_of_mind);
+  return {startPrice:sp,timerSeconds:ts,mode:md,noCom:nc};
 }
 function saveLastStart(b){
   try{
     let cur={}; try{cur=JSON.parse(localStorage.getItem('btb_last_start')||'{}');}catch(e){}
-    const next={startPrice:(typeof b.startPrice==='number')?b.startPrice:cur.startPrice,timerSeconds:(typeof b.timerSeconds==='number')?b.timerSeconds:cur.timerSeconds,mode:b.mode||cur.mode};
+    const next={startPrice:(typeof b.startPrice==='number')?b.startPrice:cur.startPrice,timerSeconds:(typeof b.timerSeconds==='number')?b.timerSeconds:cur.timerSeconds,mode:b.mode||cur.mode,noCom:(typeof b.noCom==='boolean')?b.noCom:cur.noCom};
     localStorage.setItem('btb_last_start',JSON.stringify(next));
   }catch(e){}
 }
@@ -1107,7 +1116,7 @@ async function openItem(id){
   ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<button class="btn green" style="font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start giveaway — ${l.timer_seconds||30} seconds</button><p class="small">Tap Start when you're ready. The timer starts then, and only this giveaway runs.</p>`:`<p class="small">The seller starts this giveaway when they're ready — stay in the room.</p>`}<p><b>FREE giveaway — no bidding.</b> Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`
   :`<div class="hg-room-wrap" id="cdWrap">${hourglassSVG('room-'+l.id,l.ends_at,l.created_at,'hg-room')}</div><p class="small hg-state" id="cdState"></p><p><b>FREE giveaway — no bidding.</b> Entries stay open until the timer runs out. Shipping $${l.shipping} is covered by the seller — the winner pays nothing.</p>`)
   :l.type==='auction'?(l.status==='queued'
-  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p><b>${escHtml(l.title)}</b> </p><div id="startMenu" style="margin-top:10px"><p class="small">Set like the last one. Tap to change the start bid, the time, or Regular / Sudden Death — or leave it and tap Start auction.</p><p class="small"><b>Start at</b></p><div class="tiles"><input type="hidden" id="startBid" value="${st.startPrice}">${[1,5,10,25,50,100].map(v=>`<span class="tile${st.startPrice===v?' active':''}" onclick="pickStart('bid',${v},this)">$${v}</span>`).join('')}<span class="tile${![1,5,10,25,50,100].includes(st.startPrice)?' active':''}" onclick="pickStart('bid','custom',this)">Custom</span></div><div id="startBidCustomWrap" style="display:${![1,5,10,25,50,100].includes(st.startPrice)?'block':'none'};margin-top:8px"><label>Custom start $ <input id="startBidCustom" type="number" min="0" value="${st.startPrice}" oninput="document.getElementById('startBid').value=this.value"></label></div><p class="small"><b>How long</b></p><div class="tiles"><input type="hidden" id="startTimer" value="${[10,30,120].includes(st.timerSeconds)?st.timerSeconds:'custom'}"><span class="tile${st.timerSeconds===10?' active':''}" onclick="pickStart('time',10,this)">10 seconds</span><span class="tile${st.timerSeconds===30?' active':''}" onclick="pickStart('time',30,this)">30 seconds</span><span class="tile${st.timerSeconds===120?' active':''}" onclick="pickStart('time',120,this)">2 minutes</span><span class="tile${![10,30,120].includes(st.timerSeconds)?' active':''}" onclick="pickStart('time','custom',this)">Custom</span></div><div id="startTimerCustom" style="display:${![10,30,120].includes(st.timerSeconds)?'block':'none'};margin-top:8px"><label>Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${st.timerSeconds}"></label></div><p class="small"><b>Mode</b></p><div class="tiles"><input type="hidden" id="startMode" value="${st.mode}"><span class="tile${st.mode==='Sudden Death'?' active':''}" onclick="pickStart('mode','Sudden Death',this)">Sudden Death</span><span class="tile${st.mode==='Regular'?' active':''}" onclick="pickStart('mode','Regular',this)">Regular</span></div><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p></div><button class="btn green" style="width:100%;margin-top:10px;font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
+  ?`<p><b>⏳ Waiting to start — no timer running yet.</b></p>${isSellerRoom?`<div style="border:2px solid #c9a227;border-radius:10px;padding:12px;margin:8px 0"><h3 style="margin-top:0">▶ Start this item</h3><p><b>${escHtml(l.title)}</b> </p><div id="startMenu" style="margin-top:10px"><p class="small">Set like the last one. Tap to change the start bid, the time, or Regular / Sudden Death — or leave it and tap Start auction.</p><p class="small"><b>Start at</b></p><div class="tiles"><input type="hidden" id="startBid" value="${st.startPrice}">${[1,5,10,25,50,100].map(v=>`<span class="tile${st.startPrice===v?' active':''}" onclick="pickStart('bid',${v},this)">$${v}</span>`).join('')}<span class="tile${![1,5,10,25,50,100].includes(st.startPrice)?' active':''}" onclick="pickStart('bid','custom',this)">Custom</span></div><div id="startBidCustomWrap" style="display:${![1,5,10,25,50,100].includes(st.startPrice)?'block':'none'};margin-top:8px"><label>Custom start $ <input id="startBidCustom" type="number" min="0" value="${st.startPrice}" oninput="document.getElementById('startBid').value=this.value"></label></div><p class="small"><b>How long</b></p><div class="tiles"><input type="hidden" id="startTimer" value="${[10,30,120].includes(st.timerSeconds)?st.timerSeconds:'custom'}"><span class="tile${st.timerSeconds===10?' active':''}" onclick="pickStart('time',10,this)">10 seconds</span><span class="tile${st.timerSeconds===30?' active':''}" onclick="pickStart('time',30,this)">30 seconds</span><span class="tile${st.timerSeconds===120?' active':''}" onclick="pickStart('time',120,this)">2 minutes</span><span class="tile${![10,30,120].includes(st.timerSeconds)?' active':''}" onclick="pickStart('time','custom',this)">Custom</span></div><div id="startTimerCustom" style="display:${![10,30,120].includes(st.timerSeconds)?'block':'none'};margin-top:8px"><label>Seconds (5–3600) <input id="startTimerSecs" type="number" min="5" max="3600" value="${st.timerSeconds}"></label></div><p class="small"><b>Mode</b></p><div class="tiles"><input type="hidden" id="startMode" value="${st.mode}"><span class="tile${st.mode==='Sudden Death'?' active':''}" onclick="pickStart('mode','Sudden Death',this)">Sudden Death</span><span class="tile${st.mode==='Regular'?' active':''}" onclick="pickStart('mode','Regular',this)">Regular</span></div><p class="small">Sudden Death — an outbid does not reset the timer. Regular — an outbid adds 10 seconds.</p><p class="small"><b>Cancellation</b></p><div class="tiles"><input type="hidden" id="startNoCom" value="${st.noCom?1:0}"><span class="tile${st.noCom?'':' active'}" onclick="pickStart('nocom',0,this)">Normal</span><span class="tile${st.noCom?' active':''}" onclick="pickStart('nocom',1,this)">No cancellation</span></div><p class="small">No cancellation — no refund for change of mind. A legit reason still gets a refund: not as described, damaged, wrong item, defective, or never arrived.</p></div><button class="btn green" style="width:100%;margin-top:10px;font-size:18px;padding:14px 22px" onclick="startAuction('${l.id}')">▶ Start auction</button></div>`:`<p class="small">The seller starts this auction when they're ready — stay in the room.</p>`}<p>Starting bid $${l.current_bid} • Shipping $${l.shipping}</p>`
   :`<p>Current bid $${l.current_bid} • Shipping $${l.shipping} • Total if you win now: $${l.current_bid+l.shipping}</p>`)
   :`<p>Store price $${l.fixed_price} + $${l.shipping} shipping = $${l.fixed_price+l.shipping} total</p>
   <p class="small">Pays with your saved payment method from My Profile — no payment details in the room. ${currentUser&&currentUser.paymentMethod?`Saved: <b>${escHtml(currentUser.paymentMethod)}</b>.`:'<b>Set it in My Profile first</b> — tap My Profile, then Payment method.'}</p>
@@ -1203,11 +1212,13 @@ async function startAuction(id){
   }
   const mEl=document.getElementById('startMode');
   if(mEl&&mEl.value)body.mode=mEl.value;
+  const ncEl=document.getElementById('startNoCom');
+  if(ncEl)body.noChangeOfMind=ncEl.value==='1';
   // Remember what was used, so the next item's Start panel comes up with
   // the same start bid, time and mode — run them all the same with one tap
   // on Start auction (Kevin, 2026-11-21). If the panel is not on the page,
   // there is nothing new to remember.
-  if(body.startPrice!==undefined||body.timerSeconds!==undefined||body.mode!==undefined)saveLastStart({startPrice:body.startPrice,timerSeconds:body.timerSeconds,mode:body.mode});
+  if(body.startPrice!==undefined||body.timerSeconds!==undefined||body.mode!==undefined)saveLastStart({startPrice:body.startPrice,timerSeconds:body.timerSeconds,mode:body.mode,noCom:body.noChangeOfMind});
   const r=await j('/api/listings/'+id+'/start',body,sellerHeaders(seller));
   noteSellerToken(seller,r);
   if(!r.ok){alert('Error: '+r.error);return;}
