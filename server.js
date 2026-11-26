@@ -2447,7 +2447,7 @@ app.post('/api/founding/claim', async (req, res) => {
 const WELCOME_SUBJECT = "You're on the list — Bring Time Back and More";
 function welcomeEmailBody(name) {
   const first = String(name || '').trim();
-  return 'Hi' + (first ? ' ' + first : '') + ',\n\nThanks for joining Bring Time Back and More — you\'re on the waitlist.\n\nWe\'ll email you when the site goes live, so you don\'t miss launch day.\n\nFounding sellers: first 10 get 0% until it goes live, then 5% forever. Everyone else pays 10%.\n\nList in 3 steps, bid in 1 tap: ' + LIVE_SITE + '\n\nSee you there,\nBring Time Back and More';
+  return 'Hi' + (first ? ' ' + first : '') + ',\n\nThanks for joining Bring Time Back and More — you\'re on the waitlist.\n\nWe\'ll email you when the site goes live, so you don\'t miss launch day.\n\nNobody pays anything until the site goes live. Founding sellers: the first 10 pay 5% forever. Everyone else pays 10% on the item price only, not shipping.\n\nList in 3 steps, bid in 1 tap: ' + LIVE_SITE + '\n\nSee you there,\nBring Time Back and More';
 }
 async function sendWelcomeEmail(name, email) {
   // No key: nothing to send through — caller records 'pending', never fails the signup.
@@ -2527,7 +2527,7 @@ app.post('/api/waitlist/confirm-owner', async (req, res) => {
 const LIVE_SITE = 'https://bringtimebackandmore.com';
 const LIVE_SUBJECT = 'Bring Time Back and More is LIVE now';
 function liveEmailBody() {
-  return 'Hi,\n\nBring Time Back and More is LIVE now at ' + LIVE_SITE + '\n\nWe\'re no longer in test mode — you can list, bid and buy now.\n\nFounding sellers: first 10 get 0% until live, then 5% forever. Everyone else pays 10%.\n\nList in 3 steps, bid in 1 tap.\n\nSee you there,\nBring Time Back and More';
+  return 'Hi,\n\nBring Time Back and More is LIVE now at ' + LIVE_SITE + '\n\nWe\'re no longer in test mode — you can list, bid and buy now.\n\nFounding sellers: the first 10 pay 5% forever. Everyone else pays 10% on the item price only, not shipping.\n\nList in 3 steps, bid in 1 tap.\n\nSee you there,\nBring Time Back and More';
 }
 function liveMailto(emails) {
   return 'mailto:?bcc=' + encodeURIComponent(emails.join(',')) + '&subject=' + encodeURIComponent(LIVE_SUBJECT) + '&body=' + encodeURIComponent(liveEmailBody());
