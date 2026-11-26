@@ -295,7 +295,7 @@ async function showReceipt(id, boxId){
 }
 async function load(){
   const o=await j('/api/overview');
-  document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. 0% until it goes live, then 5% forever. Normal fee 10%.`;
+  document.getElementById('founding').textContent=`Founding sellers: ${o.founding.taken}/10 taken — ${o.founding.remaining} spots left. Nobody pays anything until the site goes live. The first 10 pay 5% forever. Normal fee 10%.`;
   let followed=new Set(); if(currentUser){try{const f=await j('/api/following/'+encodeURIComponent(currentUser.name)); if(Array.isArray(f))f.forEach(x=>followed.add(x.seller));}catch(e){}}
   document.getElementById('liveNow').innerHTML=o.listings.filter(l=>l.seller_live&&l.seller_present).map(l=>`<p><span class="badge">🔴 LIVE NOW</span> ${sellerPhotoImg(l.seller_photo,28)}<b>${escHtml(l.seller)}</b>${followed.has(l.seller)?' <span class="badge gold">Keeping track</span>':''} — ${escHtml(l.title)} — ${l.type==='wheel'?'FREE giveaway':`$${l.current_bid}`} <button class="btn ghost" onclick="openItem('${l.id}')">Join room</button></p>`).join('')||'<p class="small">No sellers live now.</p>';
   document.getElementById('tiles').innerHTML=cats.map(c=>`<span class="tile ${c===curCat?'active':''}" onclick="setCat('${c}')">${c}</span>`).join('');
