@@ -307,12 +307,14 @@ async function load(){
   // once must not show as 59 separate cards — the list gets too long for
   // the screen. Group queued Random Items made together (same seller, same
   // base name, same settings) into ONE card for the whole batch, showing
+  // how many are in it. One seller = ONE Random room, whatever the settings;
+  // cancellation is picked in the room options at start (Kevin, 2026-11-25).
+  // Was: showing
   // how many are in it. The room runs them in order from the first one.
   const batchSeen={};
   rows=rows.filter(l=>{
     if(!(l.is_random&&l.status==='queued'))return true;
-    const base=l.title.replace(/\s+\d+$/,'');
-    const key=[l.seller,base,l.category,l.start_price,l.timer_seconds,l.mode,l.package_size,l.condition].join('|');
+    const key=l.seller;
     if(!batchSeen[key])batchSeen[key]={count:0,first:l,items:[]};
     batchSeen[key].count++; batchSeen[key].items.push(l);
     if(batchSeen[key].first===l){l.randomBatchCount=batchSeen[key].count;return true;}
@@ -323,18 +325,17 @@ async function load(){
   // Item 1), not the newest, so Open lands on item 1 (Kevin, 2026-11-22).
   rows=rows.map(l=>{
     if(!(l.is_random&&l.status==='queued'&&l.randomBatchCount))return l;
-    const base=l.title.replace(/\s+\d+$/,'');
-    const key=[l.seller,base,l.category,l.start_price,l.timer_seconds,l.mode,l.package_size,l.condition].join('|');
+    const key=l.seller;
     const b=batchSeen[key]; if(!b||b.items.length<2)return l;
     const first=b.items.slice().sort((x,y)=>String(x.created_at).localeCompare(String(y.created_at)))[0];
     first.randomBatchCount=b.count; return first;
   });
-  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${(l.authenticity==='Replica'||l.authenticity==='Unbranded')?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
+  document.getElementById('list').innerHTML=(curSeller?`<p><b>Showing ${escHtml(curSeller)}'s Store</b> — fixed-price items only. <button class="btn ghost" onclick="clearSellerStore()">Show all stores</button></p>`:'')+rows.map(l=>`<div class="card">${l.image_url?`<img src="${escHtml(l.image_url)}" style="max-width:100%;border-radius:10px" alt="${escHtml(l.title)}">`:''}<h3>${escHtml(l.title)} ${l.is_random&&l.status==='queued'?'':noComBadge(l)} ${l.is_random?`<span class="badge gold">🎲 RANDOM ITEM</span>`:''} ${(l.authenticity==='Replica'||l.authenticity==='Unbranded')?`<span class="badge gold">${escHtml(l.authenticity.toUpperCase())}</span>`:''}</h3>${(l.type==='auction'||l.type==='wheel')&&l.ends_at?`<div class="hg-mini-wrap">${hourglassSVG('card-'+l.id,l.ends_at,l.created_at,'hg-mini')}</div>`:''}${(l.type==='auction'||l.type==='wheel')&&l.status==='queued'?`<p class="small"><b>⏳ Waiting to start</b> — the seller taps Start auction when they're ready.</p>`:''}
   ${l.is_random?`<p class="small">🎲 RANDOM ITEM — no picture, seller shows it live on camera.</p>`:''}
   ${l.is_random&&l.randomBatchCount>1?`<p class="small"><b>🎲 ${l.randomBatchCount} random items in this batch</b> — tap Open to join the room, they run one after another.</p>`:''}
   <p>${l.is_random?'Random':escHtml(l.category)} • ${l.type==='buy_now'?'Store — Buy Now Only':l.type==='wheel'?'⏰ Time Wheel — FREE giveaway':'Auction • '+escHtml(l.mode)} • ${sellerPhotoImg(l.seller_photo,28)}${escHtml(l.seller)}${l.type==='wheel'?` • ${l.wheel_count||0} name${(l.wheel_count||0)===1?'':'s'} on the wheel`:''}</p>
   <p class="small"><b>Condition: ${escHtml(conditionOf(l))}</b></p>
-  ${noComNote(l)}
+  ${l.is_random&&l.status==='queued'?'':noComNote(l)}
   <p>${l.type==='buy_now'?`Price $${l.fixed_price}`:l.type==='wheel'?`FREE giveaway — enter free, no bidding`:`Current bid $${l.current_bid} • Starting $${l.start_price}`}<br>Shipping $${l.shipping} (buyer pays)${l.package_size?` • ${shipLabelOf(l.package_size)}`:''} • ${shipViaText(l)} • Insured shipping ✓</p>
   <p class="small">${l.status==='queued'?'':'Status: '+escHtml(l.status)} ${l.payment_status==='declined'?'<span class="badge">PAYMENT DECLINED</span>':''} ${l.payment_status==='validated'?'<span class="badge green">Payment went through — in escrow hold</span>':''}</p>
   ${l.status==='queued'&&l.type!=='buy_now'&&currentUser&&l.seller===authName()?`<button class="btn green" onclick="startShow('${l.id}')">▶ Go live with this</button>`:`<button class="btn" onclick="openItem('${l.id}')">Open</button>`} <button class="btn ghost" onclick="showSellerStore('${escJs(l.seller)}')">Visit ${escHtml(l.seller)}'s Store</button></div>`).join('')||'<p>No listings yet — be the first to sell something.</p>';
