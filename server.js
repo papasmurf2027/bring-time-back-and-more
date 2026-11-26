@@ -421,9 +421,26 @@ function _canSeeWinnerAddress(req, l, u) {
   return false;
 }
 function _stripWinnerAddress(l, req, u) { if (!l) return l; const out = { ...l }; if (!_canSeeWinnerAddress(req, l, u)) delete out.winner_address; return out; }
+// Stay signed in (Kevin, 2026-11-25): once someone signs in they stay
+// signed in on that phone until THEY sign out. A session lasts a year and
+// the year starts over every time they use the site. A cookie the site sets
+// itself backs up the phone's saved copy, so the phone clearing its saved
+// data does not sign them out.
+const SESSION_DAYS = 365;
+function _cookieToken(req) {
+  const c = (req.headers && req.headers.cookie) || '';
+  const m = c.match(/(?:^|;\s*)btb_s=([a-f0-9]{48})(?:;|$)/);
+  return m ? m[1] : '';
+}
+function _setSessionCookie(res, token) {
+  res.setHeader('Set-Cookie', 'btb_s=' + token + '; Path=/; Max-Age=' + (SESSION_DAYS * 24 * 3600) + '; HttpOnly; SameSite=Lax' + (isPg ? '; Secure' : ''));
+}
+function _clearSessionCookie(res) {
+  res.setHeader('Set-Cookie', 'btb_s=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax' + (isPg ? '; Secure' : ''));
+}
 async function _createSession(userId) {
   const token = crypto.randomBytes(24).toString('hex'); // 48 hex chars
-  const expiresAt = new Date(Date.now() + 30 * 24 * 3600 * 1000).toISOString();
+  const expiresAt = new Date(Date.now() + SESSION_DAYS * 24 * 3600 * 1000).toISOString();
   await query('INSERT INTO sessions(id,user_id,token_hash,created_at,expires_at) VALUES($1,$2,$3,$4,$5)', [uid(), userId, _hashToken(token), nowISO(), expiresAt]);
   return token;
 }
@@ -433,6 +450,10 @@ async function _userFromSession(req) {
   const row = await queryOne('SELECT * FROM sessions WHERE token_hash=$1', [_hashToken(token)]);
   if (!row) return null;
   if (row.expires_at && new Date(row.expires_at) <= new Date()) { await query('DELETE FROM sessions WHERE id=$1', [row.id]); return null; }
+  // Using the site starts the year over (at most one write a day).
+  if (row.expires_at && new Date(row.expires_at).getTime() - Date.now() < (SESSION_DAYS - 1) * 24 * 3600 * 1000) {
+    try { await query('UPDATE sessions SET expires_at=$1 WHERE id=$2', [new Date(Date.now() + SESSION_DAYS * 24 * 3600 * 1000).toISOString(), row.id]); } catch (e) { /* keep going */ }
+  }
   return queryOne('SELECT * FROM users WHERE id=$1', [row.user_id]);
 }
 async function requireAuth(req, res) {
@@ -557,6 +578,7 @@ app.post('/api/auth/signup', async (req, res) => {
   // Verification note in test mode: best effort only, never blocks signup.
   _sendAccountEmail(email, 'Your Bring Time Back and More account',
     'Hi ' + name + ',\n\nYour Bring Time Back and More account is ready — you can bid, buy and sell.\n\nYou signed up as: ' + role + '.\n\nSee you there,\nBring Time Back and More').catch(() => {});
+  _setSessionCookie(res, token);
   res.json({ ok: true, user: _publicUser(user), sessionToken: token });
 });
 app.post('/api/auth/login', async (req, res) => {
@@ -566,16 +588,22 @@ app.post('/api/auth/login', async (req, res) => {
   const user = await queryOne('SELECT * FROM users WHERE email=$1', [email]);
   // Generic error either way — never reveal whether the email exists.
   if (!user || !_passwordOk(password, user.salt, user.password_hash)) return res.json({ ok: false, error: 'email or password is wrong' });
-  // Session rotation (2026-11-19 fix): a fresh sign-in replaces every older
-  // session for this user, so a stolen old token stops working on next login.
-  await query('DELETE FROM sessions WHERE user_id=$1', [user.id]);
+  // Signing in on one phone no longer signs you out on another (Kevin,
+  // 2026-11-25). "Sign out everywhere" and a password reset still end all.
   const token = await _createSession(user.id);
+  _setSessionCookie(res, token);
   res.json({ ok: true, user: _publicUser(user), sessionToken: token });
 });
 app.get('/api/auth/me', async (req, res) => {
-  const u = await _userFromSession(req);
-  if (!u) return res.status(401).json({ ok: false, error: 'not signed in' });
-  res.json({ ok: true, user: _publicUser(u) });
+  let u = await _userFromSession(req);
+  if (u) return res.json({ ok: true, user: _publicUser(u) });
+  // The phone lost its saved copy — the site's own cookie signs them back in.
+  const ck = _cookieToken(req);
+  if (ck) {
+    u = await _userFromSession({ headers: { 'x-session-token': ck } });
+    if (u) return res.json({ ok: true, user: _publicUser(u), sessionToken: ck });
+  }
+  res.status(401).json({ ok: false, error: 'not signed in' });
 });
 app.post('/api/auth/address', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
@@ -695,11 +723,15 @@ app.post('/api/auth/role-confirm', async (req, res) => {
 app.post('/api/auth/logout', async (req, res) => {
   const token = (req.headers && req.headers['x-session-token']) || (req.body && req.body.sessionToken) || '';
   if (token) await query('DELETE FROM sessions WHERE token_hash=$1', [_hashToken(token)]);
+  const ck = _cookieToken(req);
+  if (ck && ck !== token) await query('DELETE FROM sessions WHERE token_hash=$1', [_hashToken(ck)]);
+  _clearSessionCookie(res);
   res.json({ ok: true });
 });
 app.post('/api/auth/logout-everywhere', async (req, res) => {
   const u = await requireAuth(req, res); if (!u) return;
   await query('DELETE FROM sessions WHERE user_id=$1', [u.id]);
+  _clearSessionCookie(res);
   res.json({ ok: true, message: 'signed out on every device — sign in again to continue' });
 });
 // Change the security question/answer. Only the signed-in user, and only
