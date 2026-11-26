@@ -79,10 +79,14 @@ function authMode(){if(_authMode)return _authMode;let seen=false;try{seen=!!loca
 function setAuthMode(m){_authMode=m;authMsg('');renderAuth();}
 function loadSession(){try{const u=localStorage.getItem('btb_user');if(u)currentUser=JSON.parse(u);}catch(e){}}
 async function authMe(){
-  if(!sessionToken()){loadSession();renderAuth();return;}
+  // Stay signed in until YOU sign out (Kevin, 2026-11-25). Only the site
+  // itself saying "not signed in" signs you out — a weak connection or the
+  // site restarting never does. If this phone lost its saved copy, the
+  // site's own cookie signs you back in.
   const r=await j('/api/auth/me');
-  if(r&&r.ok&&r.user){currentUser=r.user;try{localStorage.setItem('btb_user',JSON.stringify(r.user));}catch(e){}}
-  else{currentUser=null;try{localStorage.removeItem('btb_session');localStorage.removeItem('btb_user');}catch(e){}}
+  if(r&&r.ok&&r.user){currentUser=r.user;try{if(r.sessionToken)localStorage.setItem('btb_session',r.sessionToken);localStorage.setItem('btb_user',JSON.stringify(r.user));if(r.user.email)localStorage.setItem('btb_last_email',r.user.email);}catch(e){}}
+  else if(r&&r.error==='not signed in'){currentUser=null;try{localStorage.removeItem('btb_session');localStorage.removeItem('btb_user');}catch(e){}}
+  else if(sessionToken()){loadSession();}
   renderAuth();
   syncSellerToken();
 }
@@ -130,7 +134,7 @@ async function signIn(){
   if(!r.ok){authMsg('Error: '+r.error);return;}
   setSession(r.user,r.sessionToken);authMsg('Signed in as '+r.user.name+'.');show('profile');
 }
-async function signOut(){try{await j('/api/auth/logout');}catch(e){}setSession(null);authMsg('Signed out.');const a=document.getElementById('authSec');if(a)a.scrollIntoView({behavior:'smooth',block:'start'});}
+async function signOut(){try{await j('/api/auth/logout',{});}catch(e){}setSession(null);authMsg('Signed out.');const a=document.getElementById('authSec');if(a)a.scrollIntoView({behavior:'smooth',block:'start'});}
 async function saveAddress(){if(needSignIn())return;const r=await j('/api/auth/address',{address:document.getElementById('aAddr').value});if(!r.ok){authMsg('Error: '+r.error);return;}if(currentUser)currentUser.shippingAddress=r.shippingAddress;try{localStorage.setItem('btb_user',JSON.stringify(currentUser));}catch(e){}authMsg(r.shippingAddress?('Default shipping address saved — this is your main address now, and it counts for future buys. Items you already won still ship to the address on file when you won them.'):'Default shipping address cleared — add one before you bid or buy.');}
 // Switch a buyer account to buy-and-sell (Kevin, 2026-11-20): one tap on
 // My Profile, no second account, no waitlist — but it needs a code emailed
