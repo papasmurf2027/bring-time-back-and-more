@@ -1,4 +1,4 @@
-// Bring Time Back and More — Railway-ready rebuild (fresh code, not a copy of the Muse artifact).
+// Bring Time Back and More — Railway-ready rebuild.
 // Node + Express + Postgres (DATABASE_URL on Railway). Local fallback: SQLite file data.db.
 // TEST MODE ONLY: no real payment processor is connected. Payment checks are simulated
 // with test details, and escrow is tracked state in the database, not a real bank account.
@@ -2688,7 +2688,12 @@ app.get('/api/dashboard', async (req, res) => {
     const _amt = _sl.type === 'buy_now' ? (_sl.fixed_price || 0) : (_sl.current_bid || 0);
     ownerInbox.push({ id: _sl.id, title: _sl.title, type: _sl.type, seller: _sl.seller, winner: _sl.winner || '', price: _amt, shipping: _sl.shipping || 0, total: _sr ? _sr.total : (_amt + (_sl.shipping || 0)), receiptNo: _sr ? _sr.receipt_no : '', date: _sr ? _sr.created_at : _sl.created_at, escrow: _sl.escrow_status || '', delivered: !!_sl.delivered });
   }
-  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, badListingStrikes, stuckSales, neverArrivedRefunds, ownerInbox, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
+  // Who joined (Kevin, 2026-11-25): every account, newest first, owner only.
+  // Username, role and join date only — never passwords, addresses or payment.
+  const _joined = await query('SELECT name, role, created_at FROM users ORDER BY created_at DESC');
+  const _weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const whoJoined = { total: _joined.length, last7Days: _joined.filter(u => String(u.created_at) >= _weekAgo).length, people: _joined.slice(0, 200).map(u => ({ name: u.name, role: u.role || 'buyer', joinedAt: u.created_at })) };
+  const ytd = { year: ytdYear, fees: Math.round(ytdFees * 100) / 100, siteSales: Math.round(ytdSiteSales * 100) / 100, salesCount: ytdSalesCount, taxSetAside: Math.round(ytdFees * (settings.tax_percent / 100) * 100) / 100 };  const allTime = { fees: Math.round(fees * 100) / 100, siteSales: Math.round(allTimeSiteSales * 100) / 100, salesCount: allTimeSalesCount };  res.json({ totalFeesEarned: Math.round(fees * 100) / 100, taxPercent: settings.tax_percent, taxSetAside: Math.round(tax * 100) / 100, availableToUse: Math.round((fees - tax) * 100) / 100, unpaidWins: unpaid, refundsPending: refunds, escrowHeld: held, safeDraw, incorrectClaimStrikes, badListingStrikes, stuckSales, neverArrivedRefunds, ownerInbox, whoJoined, ytd, allTime, ytdFees: ytd.fees, ytdSiteSales: ytd.siteSales, ytdSalesCount: ytd.salesCount, ytdTaxSetAside: ytd.taxSetAside, allTimeFees: allTime.fees, allTimeSiteSales: allTime.siteSales, allTimeSalesCount: allTime.salesCount });
 });
 app.post('/api/settings/tax', async (req, res) => {
   if (!requireOwner(req, res)) return;

@@ -1,6 +1,6 @@
 # Bring Time Back and More — Railway-ready rebuild
 
-A fresh rebuild of Kevin's auction site, built from the settled spec — **not** a copy of the Muse artifact source. Node.js + Express + Postgres on Railway, with a local SQLite fallback for testing.
+A fresh rebuild of Kevin's auction site, built from the settled spec. Node.js + Express + Postgres on Railway, with a local SQLite fallback for testing.
 
 **Test mode only:** no real payment processor is connected. Payment checks are simulated with test details, escrow is tracked state in the database (not a real bank account), and Label Pass is a test-only label record. Do not take real money until an LLC + a real processor (e.g. Stripe Connect) are in place.
 
@@ -84,9 +84,9 @@ curl -X POST localhost:3000/api/listings/<ID>/bid -H 'Content-Type: application/
 7. **When the trial runs out** (30 days or $5 credits): upgrade to keep services online — Railway Hobby is $5/month, or the Free plan is $1/month after trial per Railway's pricing page. That step charges money — only do it when Kevin says so.
 8. **Before real money:** form the LLC (Jan 2027 in RI — do not file in 2026), connect a real payment processor, connect a real streaming service and a real shipping carrier. Until then, keep `PRELAUNCH=true`.
 
-## Known differences / gaps vs the Muse v21 site
+## Known differences / gaps
 
-- No photo uploads are stored: listings have no stored photos (same as Muse v21), and the refund photo/video are recorded by file *name* — the API requires both names, but does not store the file bytes. A real file store (e.g. Railway volume / S3) is needed before live refunds.
+- No photo uploads are stored: listings have no stored photos, and the refund photo/video are recorded by file *name* — the API requires both names, but does not store the file bytes. A real file store (e.g. Railway volume / S3) is needed before live refunds.
 - Chat polls on page load, not live-push; the front end refreshes listings every 15s.
 - Camera Go Live sets the LIVE NOW status only — no video is streamed (same honest limit as v21).
 - Test listings in the local `data.db` are throwaway; Railway Postgres starts empty.
